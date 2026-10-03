@@ -1,0 +1,49 @@
+<script>
+  /**
+   * App.html — клиентская часть. На этапе 1 только проверяет связь с сервером
+   * и показывает, под кем выполнен вход. Экраны на Vue появятся на этапе 3.
+   */
+  (function () {
+    function toast(text, isError) {
+      var el = document.getElementById('toast');
+      el.textContent = text;
+      el.className = 'toast' + (isError ? ' error' : '');
+      el.hidden = false;
+      clearTimeout(toast._t);
+      toast._t = setTimeout(function () { el.hidden = true; }, isError ? 6000 : 2500);
+    }
+
+    /** Вызов серверной функции как Promise; ответ { ok, data | error }. */
+    function call(name) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function (resolve, reject) {
+        var runner = google.script.run
+          .withSuccessHandler(function (res) {
+            if (res && res.ok) resolve(res.data);
+            else reject(res || { error: 'Пустой ответ сервера' });
+          })
+          .withFailureHandler(function (err) {
+            reject({ error: 'Нет связи с сервером: ' + (err && err.message ? err.message : err) });
+          });
+        runner[name].apply(runner, args);
+      });
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+    }
+
+    call('getBootstrap').then(function (data) {
+      document.getElementById('who').textContent = data.user.name + ' · ' + data.user.role;
+      document.getElementById('main').innerHTML =
+        '<div class="card"><p>Здравствуйте, ' + esc(data.user.name) + '! Приложение подключено к таблице.</p>' +
+        '<p class="muted">Стадий в справочнике: ' + data.dicts.stages.length +
+        ', активных тарифов: ' + data.tariffs.length +
+        ', активных шаблонов: ' + data.templates.length + '.</p>' +
+        '<p class="muted">Экраны «Сегодня», «Воронка», карточка сделки появятся на следующих этапах.</p></div>';
+    }).catch(function (res) {
+      document.getElementById('main').innerHTML = '<div class="card"><p>' + esc(res.error) + '</p></div>';
+      toast(res.error, true);
+    });
+  })();
+</script>

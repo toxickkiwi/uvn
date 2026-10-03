@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <?!= include('Styles') ?>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">CRM «Учёт в народ»</div>
+        <div class="who" id="who">Загрузка…</div>
+      </header>
+      <main class="main" id="main">
+        <p class="muted">Загружаю данные…</p>
+      </main>
+    </div>
+    <div class="toast" id="toast" hidden></div>
+    <?!= include('App') ?>
+  </body>
+</html>
