@@ -26,7 +26,18 @@ test('setupSpreadsheet на стартовой таблице: данные не
   const before = {};
   names.forEach((n) => { before[n] = sim.ss.dump(n); });
   sim.ctx.setupSpreadsheet();
-  names.forEach((n) => assert.deepStrictEqual(sim.ss.dump(n), before[n], 'изменился лист ' + n));
+  // Ожидаемые изменения стартовой таблицы: колонка «Перспектива» и поток «Реактивация» → «Исходящее».
+  const norm = (rows) => rows.map((r) => r.map((v) => (v === 'Реактивация' ? 'Исходящее' : v)));
+  names.forEach((n) => {
+    let after = sim.ss.dump(n);
+    if (n === 'Сделки') {
+      assert.strictEqual(after[0][20], 'Перспектива');
+      after = after.map((r) => r.slice(0, 20));
+    }
+    assert.deepStrictEqual(after, norm(before[n]).map((r) => r.slice(0, after[0] ? Math.max(after[0].length, r.length) : r.length)), 'изменился лист ' + n);
+  });
+  assert.ok(!JSON.stringify(sim.ss.dump('Сделки')).includes('Реактивация'));
+  assert.strictEqual(sim.ss.getSheetByName('Сделки').cf.length, 2, 'два правила цвета строк');
   assert.strictEqual(sim.ss.getSheetByName('Сделки').getFrozenRows(), 1);
   assert.ok(sim.ss.getSheetByName('Сделки').validations[13], 'нет списка на «Стадия»');
   assert.ok(sim.ss.getSheetByName('Касания').validations[3], 'нет списка на «Тип»');
@@ -39,6 +50,8 @@ test('повторный запуск ничего не меняет', () => {
   const snap = names.map((n) => sim.ss.dump(n));
   sim.ctx.setupSpreadsheet();
   assert.deepStrictEqual(names.map((n) => sim.ss.dump(n)), snap);
+  assert.strictEqual(sim.ss.getSheetByName('Сделки').cf.length, 2, 'правила цвета не задваиваются');
+  assert.ok(/ничего менять не пришлось/.test(sim.state.alerts[1]), sim.state.alerts[1]);
 });
 
 test('часовой пояс таблицы ставится на Москву', () => {

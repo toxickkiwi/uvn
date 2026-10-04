@@ -115,6 +115,8 @@ class Sheet {
   insertRowsAfter(_, n) { this.maxRows += n; }
   insertColumnsAfter(_, n) { this.maxCols += n; }
   getFrozenRows() { return this.frozen; }
+  getConditionalFormatRules() { return (this.cf || []).slice(); }
+  setConditionalFormatRules(rules) { this.cf = rules.slice(); }
   setFrozenRows(n) { this.frozen = n; }
   getDataRange() {
     return new Range(this, 1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1));
@@ -181,10 +183,24 @@ function create({ workbook, email = '', appUrl = 'https://script.google.com/macr
       getActive: () => ss,
       getActiveSpreadsheet: () => ss,
       getUi: () => ({ alert: (m) => state.alerts.push(m) }),
+      newConditionalFormatRule: () => {
+        const r = {};
+        const b = {
+          whenFormulaSatisfied: (f) => { r.formula = f; return b; },
+          setBackground: (c) => { r.bg = c; return b; },
+          setRanges: (rs) => { r.ranges = rs; return b; },
+          build: () => ({
+            ...r,
+            getBooleanCondition: () => ({ getCriteriaValues: () => [r.formula], getBackground: () => r.bg })
+          })
+        };
+        return b;
+      },
       newDataValidation: () => {
         const rule = {};
         const b = {
           requireValueInRange: (r, show) => { rule.range = r; rule.show = show; return b; },
+          requireCheckbox: () => { rule.checkbox = true; return b; },
           setAllowInvalid: (v) => { rule.allowInvalid = v; return b; },
           build: () => rule
         };

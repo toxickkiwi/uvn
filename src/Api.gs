@@ -74,6 +74,8 @@ function dealView_(d, client, stats) {
     v.answered = s ? s.answered : false;
   }
   v.imported = String(d.source || '') !== SOURCE_CRM;
+  v.prospect = toBool_(d.prospect);
+  v.color = dealColor_(d);
   return v;
 }
 
@@ -104,13 +106,20 @@ function svcGetToday_(user) {
   var overdue = [];
   var today = [];
   var fresh = [];
-  var counters = { created: 0, touches: 0, paid: 0, paidSum: 0 };
+  var counters = { created: 0, touches: 0, paid: 0, paidSum: 0, monthPaid: 0, monthPaidSum: 0 };
+  var monthStart = mskMonthStart_(now, 0);
+  var monthEnd = mskMonthStart_(now, 1);
+  counters.month = monthStart.toISOString();
 
   deals.forEach(function (d) {
     if (isDate_(d.createdAt) && d.createdAt >= dayStart && d.createdAt < dayEnd) counters.created++;
     if (d.stage === STAGE.PAID && isDate_(d.paidAt) && d.paidAt >= dayStart && d.paidAt < dayEnd) {
       counters.paid++;
       counters.paidSum += toNumber_(d.amount);
+    }
+    if (d.stage === STAGE.PAID && isDate_(d.paidAt) && d.paidAt >= monthStart && d.paidAt < monthEnd) {
+      counters.monthPaid++;
+      counters.monthPaidSum += toNumber_(d.amount);
     }
     if (!isOpenStage_(d.stage)) return;
     var v = dealView_(d, clients[String(d.clientId)], stats);
@@ -295,7 +304,8 @@ function svcCreateDeal_(user, payload) {
       source: SOURCE_CRM,
       check: '',
       owner: user.email,
-      updatedAt: now
+      updatedAt: now,
+      prospect: toBool_(dealIn.prospect)
     };
     if (deal.amount === '' || deal.amount === null) {
       var price = tariffPrice_(ref.tariffs, deal.course, deal.tariff);
@@ -322,7 +332,7 @@ function settingsWithDefaults_() {
 /* ---------- Изменение сделки ---------- */
 
 var DEAL_EDITABLE = ['potok', 'channel', 'request', 'course', 'tariff', 'amount', 'payMethod', 'orderNo',
-  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt'];
+  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt', 'prospect'];
 
 /**
  * Общая часть updateDeal / addTouch / cron: применяет patch к сделке, проверяет правила,

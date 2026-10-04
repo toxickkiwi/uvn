@@ -34,8 +34,20 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const after = await p.locator('.badge.red').innerText();
     if (+after !== +before - 1) throw new Error(before + ' → ' + after);
   });
+  await step('Строка «Итого оплачено за месяц»', async () => {
+    const t = await p.locator('.month-total').innerText();
+    if (!/Итого оплачено за октябрь/.test(t)) throw new Error(t);
+    console.log('   ', t.replace(/\s+/g, ' '));
+  });
   await step('Новое обращение по клавише N → карточка', async () => {
     await p.keyboard.press('n');
+    const potoki = await p.locator('.modal .seg >> nth=1').innerText();
+    if (!/Исходящее/.test(potoki) || /Реактивация/.test(potoki)) throw new Error('потоки: ' + potoki);
+    await p.selectOption('.modal select >> nth=0', 'ЯБ');
+    const tariffs = await p.locator('.modal select >> nth=1').locator('option').allInnerTexts();
+    if (tariffs.join('|') !== '— не выбран —|Необходимый минимум|Золотая середина|Всё и сразу') throw new Error('тарифы: ' + tariffs);
+    await p.selectOption('.modal select >> nth=1', 'Золотая середина');
+    await p.click('.modal .prospect-btn');
     await p.click('.modal >> text=Инстаграм');
     await p.fill('.modal input.input >> nth=0', 'https://instagram.com/New.Client_77/');
     await p.locator('.modal input.input >> nth=1').fill('Вера');
@@ -44,7 +56,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.keyboard.press('Enter');
     await p.waitForSelector('.deal-grid', { timeout: 15000 });
     const head = await p.locator('.deal-head').innerText();
-    if (!/Вера/.test(head) || !/Новое/.test(head)) throw new Error(head);
+    if (!/Вера/.test(head) || !/Новое/.test(head) || !/Есть перспектива/.test(head)) throw new Error(head);
+    const amount = await p.inputValue('.zone-deal input[type=number]');
+    if (amount !== '89900') throw new Error('сумма ' + amount);
     const nick = await p.locator('.zone-client').innerText();
     if (!/new\.client_77/.test(nick)) throw new Error('ник не нормализован: ' + nick);
     console.log('   ', head.replace(/\s+/g, ' '));
@@ -53,8 +67,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.fill('input[list="dl-courses"]', 'УСН');
     await p.locator('input[list="dl-courses"]').dispatchEvent('change');
     await p.waitForTimeout(400);
-    await p.fill('input[list="dl-tariffs"]', 'Золотая середина');
-    await p.locator('input[list="dl-tariffs"]').dispatchEvent('change');
+    await p.selectOption('.zone-deal select:near(:text("Тариф"))', 'Золотая середина');
     await p.waitForFunction(() => document.querySelector('.zone-deal input[type=number]').value === '59900', null, { timeout: 5000 });
   });
   await step('Шаблон: копирование с именем и касание «Шаблон»', async () => {
@@ -66,6 +79,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (!/^Вера, добрый день/.test(clip)) throw new Error('буфер: ' + clip);
     const stage = await p.locator('.deal-head .stage').innerText();
     if (stage !== 'В диалоге') throw new Error('стадия ' + stage);
+  });
+  await step('История: входящие и исходящие помечены', async () => {
+    const meta = await p.locator('.feed-item .feed-meta').allInnerTexts();
+    if (!meta.some((m) => /исходящее\s*Шаблон/.test(m)) || !meta.some((m) => /входящее\s*Обращение/.test(m))) throw new Error(meta.join(' / '));
   });
   await step('Правка клиента: телефон нормализуется', async () => {
     await p.click('.zone-client .kv:has-text("Телефон") .inline-val');

@@ -118,6 +118,33 @@
     if (/^\d+$/.test(s)) return 'gcId';
     return 'nick';
   }
+  /** Курсы из «Тарифы» (уникальные, в порядке листа). */
+  function courseList() {
+    var seen = {};
+    return store.boot.tariffs.map(function (t) { return t.course; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
+  }
+  /** Тарифы для выпадающего списка: тарифы курса, а если курс не из списка — все названия тарифов. */
+  function tariffOptions(course, current) {
+    var c = String(course || '').trim();
+    var list = store.boot.tariffs.filter(function (t) { return t.course === c; });
+    var names = [];
+    (list.length ? list : store.boot.tariffs).forEach(function (t) { if (names.indexOf(t.tariff) < 0) names.push(t.tariff); });
+    if (current && names.indexOf(current) < 0) names.push(current);
+    return names;
+  }
+  function tariffPrice(course, tariff) {
+    var c = String(course || '').trim();
+    var hit = store.boot.tariffs.filter(function (t) { return t.course === c && t.tariff === tariff; })[0];
+    return hit ? hit.price : null;
+  }
+  /** Направление касания: входящее — пишет клиент, исходящее — пишем мы. */
+  var TOUCH_DIR = { 'Клиент ответил': 'in', 'Написал': 'out', 'Отправил материалы': 'out', 'Шаблон': 'out' };
+  function touchDir(type, potok) {
+    if (type === 'Обращение') return potok === 'Исходящее' ? 'out' : 'in';
+    return TOUCH_DIR[type] || '';
+  }
+  var COLOR_TITLE = { green: 'Оплачено', yellow: 'Есть перспектива оплаты', white: '' };
+
   var CONTACT_NAMES = { nick: 'ник Инстаграм', dialogUrl: 'ссылка на диалог', email: 'почта', phone: 'телефон', gcId: 'ID GetCourse' };
 
   /** Как fillTemplate_ в Rules.gs. Возвращает { text, html } — html подсвечивает пустые переменные. */
@@ -247,7 +274,7 @@
     props: ['d', 'late', 'alertMin'],
     emits: ['open', 'wrote', 'plus'],
     template:
-      '<div class="drow" :class="{alert: isAlert}" @click="$emit(\'open\', d)">' +
+      '<div class="drow" :class="[{alert: isAlert}, \'c-\' + (d.color || \'white\')]" :title="colorTitle" @click="$emit(\'open\', d)">' +
       '  <div class="drow-main">' +
       '    <div class="drow-title">' +
       '      <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
@@ -267,6 +294,7 @@
       '</div>',
     computed: {
       busy: function () { return !!this.d._busy; },
+      colorTitle: function () { return COLOR_TITLE[this.d.color] || ''; },
       link: function () { return dialogLink(this.d); },
       ago: function () { return daysAgo(this.d.lastTouchAt); },
       agoText: function () {
@@ -293,6 +321,7 @@
       '  <div v-if="loading && !data" class="loading">Загружаю…</div>' +
       '  <div v-else-if="error" class="panel">{{ error }}</div>' +
       '  <template v-else-if="data">' +
+      '    <div class="month-total"><span>Итого оплачено за {{ monthName }}:</span> <b>{{ rub(data.counters.monthPaidSum) || "0 ₽" }}</b> <span class="muted">· оплат: {{ data.counters.monthPaid }}</span></div>' +
       '    <div class="counters">' +
       '      <div class="counter"><div class="num">{{ data.counters.created }}</div><div class="cap">новых обращений</div></div>' +
       '      <div class="counter"><div class="num">{{ data.counters.touches }}</div><div class="cap">касаний</div></div>' +
@@ -319,6 +348,12 @@
         ];
       },
       alertMin: function () { return store.boot.settings.NEW_DEAL_ALERT_MIN; },
+      monthName: function () {
+        var m = this.data && this.data.counters.month ? msk(this.data.counters.month) : msk(new Date().toISOString());
+        // month — начало месяца по Москве; +1 день, чтобы точно попасть внутрь месяца
+        var d = new Date(Date.UTC(m.y, m.m - 1, 15));
+        return d.toLocaleDateString('ru-RU', { month: 'long', timeZone: 'UTC' }).replace(/^./, function (c) { return c; });
+      },
       todayLabel: function () {
         return new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' });
       }
@@ -566,6 +601,7 @@
       '      <span class="stage" :class="stageClass(deal.stage)">{{ deal.stage }}</span>' +
       '      <span class="chip" :class="\'ch-\' + deal.channel">{{ deal.channel }}</span>' +
       '      <span class="faint">{{ deal.id }} · {{ deal.potok }} · создана {{ fmtDate(deal.createdAt) }}</span>' +
+      '      <button class="btn sm prospect-btn" :class="{on: deal.prospect}" :disabled="deal.stage === \'Оплачено\' || deal.stage === \'Отказ\'" @click="saveDeal(\'prospect\', !deal.prospect)" title="Жёлтый цвет: работаем плотно, есть перспектива оплаты">{{ deal.prospect ? "★ Есть перспектива" : "☆ Перспектива оплаты" }}</button>' +
       '      <a v-if="link" class="btn sm primary" style="margin-left:auto" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
       '    </div>' +
       '    <div v-if="client && client.check" class="banner"><b>Клиент:</b><span class="grow">{{ client.check }}</span><button class="btn sm" @click="checked(\'client\')">Проверено</button></div>' +
@@ -594,13 +630,13 @@
       '          <button class="btn sm" :class="{on: showTpl}" @click="showTpl = !showTpl">Шаблоны</button></div>' +
       '        <templates-panel v-if="showTpl" :deal="deal" :client="client" @used="onTemplateUsed" @close="showTpl = false"></templates-panel>' +
       '        <div class="touch-form">' +
-      '          <div class="seg" style="margin-bottom:8px"><button v-for="t in touchTypes" :key="t" class="btn sm" :class="{on: touch.type === t}" @click="touch.type = t">{{ t }}</button></div>' +
+      '          <div class="seg" style="margin-bottom:8px"><button v-for="t in touchTypes" :key="t" class="btn sm" :class="{on: touch.type === t}" @click="touch.type = t"><span v-if="dirOf(t)" class="dir" :class="\'dir-\' + dirOf(t)">{{ dirOf(t) === \'in\' ? \'↓\' : \'↑\' }}</span>{{ t }}</button></div>' +
       '          <textarea class="textarea" v-model="touch.text" :placeholder="touch.type === \'Заметка менеджера\' ? \'Текст заметки\' : \'Комментарий (необязательно)\'" @keydown.ctrl.enter.prevent="addTouch" @keydown.meta.enter.prevent="addTouch"></textarea>' +
       '          <div class="row" style="margin-top:8px"><span class="hint grow">Ctrl+Enter — добавить</span><button class="btn primary" :disabled="touchBusy" @click="addTouch">Добавить</button></div>' +
       '        </div>' +
       '        <div v-if="!touches.length" class="muted">Касаний пока нет.</div>' +
       '        <div v-for="(t, i) in touches" :key="i" class="feed-item" :class="{system: t.type === \'Смена стадии\'}">' +
-      '          <div class="feed-meta"><b>{{ t.type }}</b><span>{{ fmtDate(t.date) }}</span><span v-if="t.authorName">{{ t.authorName }}</span></div>' +
+      '          <div class="feed-meta"><span v-if="dirOf(t.type)" class="dir-chip" :class="\'dir-\' + dirOf(t.type)">{{ dirOf(t.type) === \'in\' ? \'↓ входящее\' : \'↑ исходящее\' }}</span><b>{{ t.type }}</b><span>{{ fmtDate(t.date) }}</span><span v-if="t.authorName">{{ t.authorName }}</span></div>' +
       '          <div class="pre" v-if="t.text">{{ t.text }}</div>' +
       '        </div>' +
       '      </div>' +
@@ -614,12 +650,11 @@
       '          <div class="field grow"><label>Поток</label><select class="select" :class="err(\'potok\')" :value="deal.potok" @change="saveDeal(\'potok\', $event.target.value)"><option v-for="s in dicts.potoki" :key="s">{{ s }}</option></select></div>' +
       '          <div class="field grow"><label>Канал</label><select class="select" :class="err(\'channel\')" :value="deal.channel" @change="saveDeal(\'channel\', $event.target.value)"><option v-for="s in dicts.channels" :key="s">{{ s }}</option></select></div>' +
       '        </div>' +
-      '        <div class="field"><label>Запрос клиента</label><textarea class="textarea" :class="err(\'request\')" v-model="edit.request" @blur="saveIfChanged(\'request\')"></textarea></div>' +
+      '        <div class="field"><label>{{ deal.potok === \'Исходящее\' ? \'О чём написали клиенту\' : \'Запрос клиента\' }}</label><textarea class="textarea" :class="err(\'request\')" v-model="edit.request" @blur="saveIfChanged(\'request\')"></textarea></div>' +
       '        <div class="field"><label>Курс</label><input class="input" :class="err(\'course\')" list="dl-courses" v-model="edit.course" @change="saveIfChanged(\'course\')" placeholder="ЯБ, УСН, УСН + ОСН…"></div>' +
-      '        <div class="field"><label>Тариф</label><input class="input" :class="err(\'tariff\')" list="dl-tariffs" v-model="edit.tariff" @change="saveIfChanged(\'tariff\')">' +
+      '        <div class="field"><label>Тариф</label><select class="select" :class="err(\'tariff\')" v-model="edit.tariff" @change="saveIfChanged(\'tariff\')"><option value="">—</option><option v-for="t in tariffNames" :key="t" :value="t">{{ t }}{{ priceOf(t) ? " · " + rub(priceOf(t)) : "" }}</option></select>' +
       '          <div class="hint" v-if="tariffHint">{{ tariffHint }}</div></div>' +
       '        <datalist id="dl-courses"><option v-for="c in courses" :key="c" :value="c"></option></datalist>' +
-      '        <datalist id="dl-tariffs"><option v-for="t in tariffsForCourse" :key="t.tariff" :value="t.tariff">{{ rub(t.price) }}</option></datalist>' +
       '        <div class="row" style="align-items:flex-start">' +
       '          <div class="field grow"><label>Сумма, ₽</label><input class="input" :class="err(\'amount\')" type="number" min="0" step="100" v-model="edit.amount" @change="saveIfChanged(\'amount\')"></div>' +
       '          <div class="field grow"><label>Способ оплаты</label><select class="select" :class="err(\'payMethod\')" :value="deal.payMethod" @change="saveDeal(\'payMethod\', $event.target.value)"><option value="">—</option><option v-for="s in dicts.payMethods" :key="s">{{ s }}</option></select></div>' +
@@ -677,6 +712,7 @@
         if (!this.tariffsForCourse.length) return 'Для этого курса нет тарифов в справочнике — сумму введите вручную.';
         return '';
       },
+      tariffNames: function () { return tariffOptions(this.edit.course, this.deal.tariff); },
       quick: function () { return [{ n: 0, label: 'Сегодня' }, { n: 1, label: '+1 день' }, { n: 2, label: '+2 дня' }, { n: 7, label: '+1 неделя' }]; }
     },
     watch: { id: { immediate: true, handler: function () { this.load(); } } },
@@ -684,6 +720,8 @@
       fmtDate: fmtDate, stageClass: stageClass, rub: rub, fill: fill,
       toInputDT: toInputDT, toInputDate: toInputDate, fromInputDT: fromInputDT,
       err: function (f) { return { 'has-error': this.errField === f }; },
+      dirOf: function (type) { return touchDir(type, this.deal ? this.deal.potok : ''); },
+      priceOf: function (t) { return tariffPrice(this.edit.course, t); },
       // Страница живёт в iframe Google, история браузера там ненадёжна — возвращаемся на «Сегодня».
       back: function () { go('today'); },
       openDeal: function (id) { go('deal/' + id); },
@@ -791,8 +829,8 @@
     emits: ['close'],
     data: function () {
       return {
-        f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '' },
-        showCourse: false, dups: null, chosen: null, force: false, checking: false, busy: false, errField: '', lastChecked: ''
+        f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '', prospect: false },
+        customCourse: false, dups: null, chosen: null, force: false, checking: false, busy: false, errField: '', lastChecked: ''
       };
     },
     template:
@@ -821,14 +859,14 @@
       '        </div>' +
       '        <div class="field"><label>Имя</label><input class="input" :class="{\'has-error\': errField===\'name\'}" v-model="f.name"></div>' +
       '      </template>' +
-      '      <div class="field"><label>Запрос клиента</label><textarea class="textarea" :class="{\'has-error\': errField===\'request\'}" v-model="f.request" placeholder="Что спрашивает клиент. Enter — сохранить, Shift+Enter — новая строка"></textarea></div>' +
-      '      <a href="#" v-if="!showCourse" @click.prevent="showCourse = true">+ курс и тариф</a>' +
-      '      <div class="row" v-if="showCourse" style="align-items:flex-start">' +
-      '        <div class="field grow"><label>Курс</label><input class="input" list="dl-new-courses" v-model="f.course"></div>' +
-      '        <div class="field grow"><label>Тариф</label><input class="input" list="dl-new-tariffs" v-model="f.tariff"></div>' +
-      '        <datalist id="dl-new-courses"><option v-for="c in courses" :key="c" :value="c"></option></datalist>' +
-      '        <datalist id="dl-new-tariffs"><option v-for="t in tariffsForCourse" :key="t.tariff" :value="t.tariff"></option></datalist>' +
+      '      <div class="field"><label>{{ outgoing ? "О чём написали клиенту" : "Запрос клиента" }}</label><textarea class="textarea" :class="{\'has-error\': errField===\'request\'}" v-model="f.request" :placeholder="(outgoing ? \'Что предложили клиенту\' : \'Что спрашивает клиент\') + \'. Enter — сохранить, Shift+Enter — новая строка\'"></textarea></div>' +
+      '      <div class="row" style="align-items:flex-start">' +
+      '        <div class="field grow"><label>Курс</label>' +
+      '          <select v-if="!customCourse" class="select" v-model="f.course" @change="onCourse"><option value="">— не выбран —</option><option v-for="c in courses" :key="c" :value="c">{{ c }}</option><option value="__other">Другое / комбо…</option></select>' +
+      '          <input v-else class="input" v-model="f.course" ref="courseInput" placeholder="Например: УСН + ОСН"></div>' +
+      '        <div class="field grow"><label>Тариф</label><select class="select" v-model="f.tariff"><option value="">— не выбран —</option><option v-for="t in tariffNames" :key="t" :value="t">{{ t }}</option></select></div>' +
       '      </div>' +
+      '      <button type="button" class="btn sm prospect-btn" :class="{on: f.prospect}" @click="f.prospect = !f.prospect">{{ f.prospect ? "★ Есть перспектива оплаты" : "☆ Перспектива оплаты" }}</button>' +
       '    </div>' +
       '    <div class="modal-foot"><button class="btn" @click="$emit(\'close\')">Отмена</button>' +
       '      <button class="btn primary" :disabled="busy" @click="submit">{{ busy ? "Сохраняю…" : "Сохранить" }}</button></div>' +
@@ -842,10 +880,8 @@
         var seen = {};
         return store.boot.tariffs.map(function (t) { return t.course; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
       },
-      tariffsForCourse: function () {
-        var c = this.f.course.trim();
-        return store.boot.tariffs.filter(function (t) { return t.course === c; });
-      }
+      tariffNames: function () { return tariffOptions(this.f.course, ''); },
+      outgoing: function () { return this.f.potok === 'Исходящее'; }
     },
     watch: { 'f.contact': function () { this.force = false; } },
     mounted: function () { var self = this; nextTick(function () { if (self.$refs.contact) self.$refs.contact.focus(); }); },
@@ -865,6 +901,15 @@
         this.chosen = c;
         this.dups = null;
       },
+      onCourse: function () {
+        var self = this;
+        if (this.f.course === '__other') {
+          this.f.course = '';
+          this.customCourse = true;
+          nextTick(function () { if (self.$refs.courseInput) self.$refs.courseInput.focus(); });
+        }
+        if (this.tariffNames.indexOf(this.f.tariff) < 0) this.f.tariff = '';
+      },
       onEnter: function (e) {
         if (e.shiftKey || e.isComposing) return;
         if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
@@ -877,7 +922,7 @@
         this.errField = '';
         if (!this.f.channel) { this.errField = 'channel'; toast('Выберите канал', true); return; }
         var payload = {
-          deal: { channel: this.f.channel, potok: this.f.potok, request: this.f.request, course: this.f.course, tariff: this.f.tariff },
+          deal: { channel: this.f.channel, potok: this.f.potok, request: this.f.request, course: this.f.course, tariff: this.f.tariff, prospect: this.f.prospect },
           force: this.force
         };
         if (this.chosen) payload.clientId = this.chosen.id;

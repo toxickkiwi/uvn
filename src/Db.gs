@@ -51,7 +51,8 @@ SCHEMA[SHEET.DEALS] = {
   source: 'Источник',
   check: 'Проверить',
   owner: 'Ответственный',
-  updatedAt: 'Изменено'
+  updatedAt: 'Изменено',
+  prospect: 'Перспектива'
 };
 SCHEMA[SHEET.TOUCHES] = {
   dealId: 'ID сделки',
@@ -92,6 +93,12 @@ SCHEMA[SHEET.SETTINGS] = {
   key: 'Ключ',
   value: 'Значение'
 };
+
+/**
+ * Колонки, добавленные после запуска. Пока «Подготовить таблицу» их не создала,
+ * приложение работает без них: читает пустое значение и не пишет.
+ */
+var OPTIONAL_COLUMNS = { prospect: true };
 
 /** Поля, в которых лежат даты (в таблице — настоящие Date, клиенту — ISO-строки). */
 var DATE_FIELDS = {
@@ -143,6 +150,7 @@ function Table_(name) {
   this.col = {};
   for (var f in this.fields) {
     var idx = this.headers.indexOf(this.fields[f]);
+    if (idx < 0 && OPTIONAL_COLUMNS[f]) continue;
     if (idx < 0) {
       throw userError_('На листе «' + name + '» нет колонки «' + this.fields[f] +
         '». Откройте меню CRM → «Подготовить таблицу».');

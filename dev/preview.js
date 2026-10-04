@@ -16,6 +16,8 @@ workbook['Пользователи'][1][0] = 'max@gmail.com';
 workbook['Пользователи'][2][0] = 'marina@gmail.com';
 const sim = create({ workbook, email: process.env.PREVIEW_EMAIL || 'max@gmail.com' });
 if (process.env.PREVIEW_NOW) sim.ctx.NOW_OVERRIDE_ = new Date(process.env.PREVIEW_NOW);
+// Как после «CRM → Подготовить таблицу» на стартовой таблице
+sim.ctx.setupSpreadsheet();
 
 const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8');
 function page() {

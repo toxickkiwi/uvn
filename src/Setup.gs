@@ -16,7 +16,7 @@ var DEFAULT_SETTINGS = [
 
 /** Значения справочников по умолчанию. Ставятся только в пустую колонку. */
 var DEFAULT_DICTS = {
-  'Потоки': ['Входящее', 'Неоплаченный заказ', 'Реактивация'],
+  'Потоки': ['Входящее', 'Неоплаченный заказ', 'Исходящее'],
   'Каналы': ['ВК', 'Инстаграм', 'Макс', 'ТГ', 'Почта', 'GetCourse'],
   'Стадии': ['Новое', 'В диалоге', 'Курс подобран', 'Заказ создан', 'Оплачено', 'Отложено', 'Отказ'],
   'Способы оплаты': ['Полная', 'Банковская рассрочка', 'От организации', 'Задаток 5 000 + остаток', 'Рассрочка по допсоглашению'],
@@ -61,10 +61,13 @@ function setupSpreadsheet() {
       ensureSheet_(ss, name, values_(SCHEMA[name]), log);
     });
 
+    renamePotok_(ss, 'Реактивация', 'Исходящее', log);
     fillDicts_(ss, log);
     fillSettings_(ss, log);
     applyDropdowns_(ss, log);
     applyTextFormats_(ss);
+    applyProspectColumn_(ss);
+    applyRowColors_(ss);
 
     clearRefCache_();
     return log;
@@ -176,6 +179,82 @@ function applyTextFormats_(ss) {
     var rows = Math.max(sheet.getMaxRows() - 1, 1);
     sheet.getRange(2, c, rows, 1).setNumberFormat('@');
   });
+}
+
+/**
+ * Поток «Реактивация» переименован в «Исходящее» (менеджер пишет первым) — по просьбе руководителя.
+ * Меняет значение в «Справочники» и во всех сделках. Повторный запуск ничего не делает.
+ */
+function renamePotok_(ss, from, to, log) {
+  var dict = ss.getSheetByName(SHEET.DICTS);
+  var c = headerCol_(dict, 'Потоки');
+  var last = dict.getLastRow();
+  if (c && last > 1) {
+    var vals = dict.getRange(2, c, last - 1, 1).getValues();
+    var hasTo = vals.some(function (r) { return String(r[0]).trim() === to; });
+    var changed = false;
+    vals = vals.map(function (r) {
+      if (String(r[0]).trim() !== from) return r;
+      changed = true;
+      return [hasTo ? '' : to];
+    });
+    if (changed) {
+      dict.getRange(2, c, vals.length, 1).setValues(vals);
+      log.push('справочник «Потоки»: «' + from + '» → «' + to + '»');
+    }
+  }
+  var deals = ss.getSheetByName(SHEET.DEALS);
+  var dc = headerCol_(deals, 'Поток');
+  var dl = deals.getLastRow();
+  if (!dc || dl < 2) return;
+  var col = deals.getRange(2, dc, dl - 1, 1).getValues();
+  var n = 0;
+  col = col.map(function (r) {
+    if (String(r[0]).trim() !== from) return r;
+    n++;
+    return [to];
+  });
+  if (n) {
+    deals.getRange(2, dc, col.length, 1).setValues(col);
+    log.push('в сделках поток «' + from + '» → «' + to + '»: ' + n + ' шт.');
+  }
+}
+
+/** «Перспектива» — флажок в каждой строке «Сделки». */
+function applyProspectColumn_(ss) {
+  var sheet = ss.getSheetByName(SHEET.DEALS);
+  var c = headerCol_(sheet, 'Перспектива');
+  if (!c) return;
+  var rows = Math.max(sheet.getMaxRows() - 1, 1);
+  sheet.getRange(2, c, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+}
+
+/**
+ * Цвет строк «Сделки» (условное форматирование): зелёный — «Оплачено», жёлтый — «Перспектива»
+ * отмечена и не «Отказ». Остальные — белые. Свои старые правила при повторном запуске заменяются.
+ */
+var ROW_COLOR_GREEN = '#d9f2e0';
+var ROW_COLOR_YELLOW = '#fff4c2';
+
+function applyRowColors_(ss) {
+  var sheet = ss.getSheetByName(SHEET.DEALS);
+  var stageCol = colLetter_(headerCol_(sheet, 'Стадия'));
+  var prospectCol = colLetter_(headerCol_(sheet, 'Перспектива'));
+  var width = sheet.getMaxColumns();
+  var range = sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), width);
+  var green = '=$' + stageCol + '2="Оплачено"';
+  var yellow = '=AND($' + prospectCol + '2=TRUE,$' + stageCol + '2<>"Отказ",$' + stageCol + '2<>"Оплачено")';
+
+  var keep = sheet.getConditionalFormatRules().filter(function (r) {
+    var b = r.getBooleanCondition();
+    var vals = b ? b.getCriteriaValues() : [];
+    var f = vals.length ? String(vals[0]) : '';
+    var bg = b && b.getBackground ? b.getBackground() : '';
+    return !(bg === ROW_COLOR_GREEN || bg === ROW_COLOR_YELLOW) || f.indexOf('"Оплачено"') < 0;
+  });
+  keep.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(green).setBackground(ROW_COLOR_GREEN).setRanges([range]).build());
+  keep.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(yellow).setBackground(ROW_COLOR_YELLOW).setRanges([range]).build());
+  sheet.setConditionalFormatRules(keep);
 }
 
 /** Всплывающее сообщение, если функция запущена из меню таблицы; из редактора — только лог. */

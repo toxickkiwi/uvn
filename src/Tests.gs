@@ -180,8 +180,8 @@ function selfTestCases_() {
       assertEq_([a.stage, a.nextTask, a.taskAt], ['Новое', 'Ответить клиенту', TEST_NOW.toISOString()], 'Входящее');
       var b = testDeal_('Неоплаченный заказ', '@t.unpaid').deal;
       assertEq_([b.stage, b.nextTask, b.taskAt], ['Заказ создан', 'Написать по заказу', mskIso_('2026-10-05T12:10:00')], 'Неоплаченный заказ');
-      var c = testDeal_('Реактивация', '@t.react').deal;
-      assertEq_([c.stage, c.nextTask, c.taskAt], ['В диалоге', 'Написать повторно', mskIso_('2026-10-06T10:00:00')], 'Реактивация');
+      var c = testDeal_('Исходящее', '@t.react').deal;
+      assertEq_([c.stage, c.nextTask, c.taskAt], ['В диалоге', 'Написать повторно', mskIso_('2026-10-06T10:00:00')], 'Исходящее');
     }],
     ['При создании пишется касание «Обращение»', function () {
       var card = testDeal_('Входящее', '@t.lead');
@@ -241,12 +241,12 @@ function selfTestCases_() {
       assertEq_(stageTouch.text, 'Новое → В диалоге');
     }],
     ['Касание со своей задачей не перезаписывается задачей по умолчанию', function () {
-      var d = testDeal_('Реактивация', '@t.own').deal;
+      var d = testDeal_('Исходящее', '@t.own').deal;
       var res = svcAddTouch_(u, d.id, { type: 'Написал', nextTask: 'Позвонить после отпуска', nextTaskDate: '2026-10-20' });
       assertEq_([res.deal.nextTask, res.deal.taskAt], ['Позвонить после отпуска', mskIso_('2026-10-20T10:00:00')]);
     }],
     ['Заметка не меняет задачу', function () {
-      var d = testDeal_('Реактивация', '@t.note').deal;
+      var d = testDeal_('Исходящее', '@t.note').deal;
       var res = svcAddTouch_(u, d.id, { type: 'Заметка менеджера', text: 'Думает' });
       assertEq_(res.deal.taskAt, d.taskAt);
     }],
@@ -275,14 +275,14 @@ function selfTestCases_() {
       var deals = [
         { createdAt: d('2026-09-01'), channel: 'ВК', potok: 'Входящее', stage: 'Оплачено', paidAt: d('2026-09-10'), amount: 50000, course: 'ЯБ' },
         { createdAt: d('2026-09-15'), channel: 'ВК', potok: 'Входящее', stage: 'Отказ', lostReason: 'Нет денег' },
-        { createdAt: d('2026-09-20'), channel: 'Инстаграм', potok: 'Реактивация', stage: 'В диалоге' },
+        { createdAt: d('2026-09-20'), channel: 'Инстаграм', potok: 'Исходящее', stage: 'В диалоге' },
         { createdAt: d('2026-09-30'), channel: 'Инстаграм', potok: 'Входящее', stage: 'Оплачено', paidAt: d('2026-10-02'), amount: 30000, course: 'УСН' },
         { createdAt: d('2026-08-25'), channel: 'Почта', potok: 'Входящее', stage: 'Оплачено', paidAt: d('2026-09-05'), amount: 20000, course: 'УСН' }
       ];
       var r = computeReport_(deals, parseTaskDate_('2026-09-01', '00:00'), mskDayStart_(parseTaskDate_('2026-09-30', '00:00'), 1));
       assertEq_(r.leads, 4, 'обращения');
       assertEq_(r.byChannel, { 'ВК': 2, 'Инстаграм': 2 }, 'по каналам');
-      assertEq_(r.byPotok, { 'Входящее': 3, 'Реактивация': 1 }, 'по потокам');
+      assertEq_(r.byPotok, { 'Входящее': 3, 'Исходящее': 1 }, 'по потокам');
       assertEq_(r.paidFromLeads, 2, 'оплачено из обращений');
       assertEq_(r.conversion, 0.5, 'конверсия');
       assertEq_(r.revenue, 70000, 'выручка по дате оплаты');
@@ -296,12 +296,27 @@ function selfTestCases_() {
       assertThrows_(function () { svcGetReport_(TEST_USER, '2026-09-01', '2026-09-30'); });
       svcGetReport_(TEST_BOSS, '2026-09-01', '2026-09-30');
     }],
+    ['Цвет строки: оплачено — зелёный, перспектива — жёлтый, иначе белый', function () {
+      assertEq_(dealColor_({ stage: 'Оплачено', prospect: false }), 'green', 'оплачено');
+      assertEq_(dealColor_({ stage: 'В диалоге', prospect: true }), 'yellow', 'перспектива');
+      assertEq_(dealColor_({ stage: 'Отказ', prospect: true }), 'white', 'отказ');
+      assertEq_(dealColor_({ stage: 'Новое', prospect: '' }), 'white', 'без перспектив');
+      var d = testDeal_('Входящее', '@t.color', { prospect: true }).deal;
+      assertEq_([d.prospect, d.color], [true, 'yellow'], 'новое обращение с перспективой');
+      var upd = svcUpdateDeal_(u, d.id, { prospect: false }).deal;
+      assertEq_([upd.prospect, upd.color], [false, 'white'], 'снята перспектива');
+    }],
+    ['Поток «Исходящее»: стадия «В диалоге», задача «Написать повторно» завтра', function () {
+      var d = testDeal_('Исходящее', '@t.out').deal;
+      assertEq_([d.potok, d.stage, d.nextTask], ['Исходящее', 'В диалоге', 'Написать повторно']);
+    }],
     ['«Сегодня»: просрочено, на сегодня, без ответа, счётчики', function () {
       var t = svcGetToday_(u);
       if (!t.fresh.length) throw new Error('нет блока «Без ответа»');
       if (!t.today.length) throw new Error('нет задач на сегодня');
       if (t.counters.created < 5) throw new Error('счётчик обращений: ' + t.counters.created);
       if (t.counters.paid !== 1) throw new Error('счётчик оплат: ' + t.counters.paid);
+      assertEq_([t.counters.monthPaid, t.counters.monthPaidSum], [1, 89900], 'оплачено за месяц');
     }]
   ];
 }

@@ -15,7 +15,7 @@ var STAGE = {
 var OPEN_STAGES = [STAGE.NEW, STAGE.TALK, STAGE.PICKED, STAGE.ORDER, STAGE.POSTPONED];
 var CLOSED_STAGES = [STAGE.PAID, STAGE.LOST];
 
-var POTOK = { INBOUND: 'Входящее', UNPAID: 'Неоплаченный заказ', REACT: 'Реактивация' };
+var POTOK = { INBOUND: 'Входящее', UNPAID: 'Неоплаченный заказ', OUT: 'Исходящее' };
 
 var TOUCH = {
   LEAD: 'Обращение',
@@ -50,6 +50,12 @@ function mskDayStart_(d, addDays) {
   var shifted = d.getTime() + MSK_OFFSET_MS;
   var start = shifted - ((shifted % DAY_MS) + DAY_MS) % DAY_MS;
   return new Date(start - MSK_OFFSET_MS + (addDays || 0) * DAY_MS);
+}
+
+/** Начало московского месяца, в который попадает d, со сдвигом на addMonths месяцев. */
+function mskMonthStart_(d, addMonths) {
+  var m = new Date(d.getTime() + MSK_OFFSET_MS);
+  return new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + (addMonths || 0), 1) - MSK_OFFSET_MS);
 }
 
 /** Московская дата со временем «ЧЧ:ММ». */
@@ -192,15 +198,25 @@ function isOpenStage_(stage) {
 
 /** Начальная стадия по потоку (4.2). */
 function initialStage_(potok) {
-  if (potok === POTOK.REACT) return STAGE.TALK;
+  if (potok === POTOK.OUT) return STAGE.TALK;
   if (potok === POTOK.UNPAID) return STAGE.ORDER;
   return STAGE.NEW;
 }
 
-/** Задача по умолчанию для новой сделки (4.2). */
+/**
+ * Цвет строки (запрос руководителя): зелёный — оплачено, жёлтый — есть перспектива оплаты,
+ * белый — пока без перспектив. Закрытые «Отказ» всегда белые.
+ */
+function dealColor_(deal) {
+  if (deal.stage === STAGE.PAID) return 'green';
+  if (deal.stage !== STAGE.LOST && toBool_(deal.prospect)) return 'yellow';
+  return 'white';
+}
+
+/** Задача по умолчанию для новой сделки (4.2). Исходящее — менеджер написал первым: напомнить завтра. */
 function defaultTaskForNewDeal_(potok, now, settings) {
   if (potok === POTOK.UNPAID) return { nextTask: 'Написать по заказу', taskAt: new Date(now.getTime() + 10 * 60000) };
-  if (potok === POTOK.REACT) {
+  if (potok === POTOK.OUT) {
     return { nextTask: 'Написать повторно', taskAt: mskAt_(mskDayStart_(now, toNumber_(settings.FOLLOWUP_DAYS)), settings.TASK_DEFAULT_TIME) };
   }
   return { nextTask: 'Ответить клиенту', taskAt: new Date(now.getTime()) };
@@ -226,10 +242,11 @@ function applyDealRules_(deal, prev, ctx) {
   if (!deal.clientId) throw userError_('У сделки не указан клиент.', 'clientId');
   if (!deal.stage) throw userError_('Укажите стадию.', 'stage');
   if (dicts.stages.indexOf(deal.stage) < 0) throw userError_('Неизвестная стадия «' + deal.stage + '».', 'stage');
-  checkDict_(deal, 'potok', dicts.potoki, 'поток');
-  checkDict_(deal, 'channel', dicts.channels, 'канал');
-  checkDict_(deal, 'payMethod', dicts.payMethods, 'способ оплаты');
-  checkDict_(deal, 'lostReason', dicts.lostReasons, 'причину отказа');
+  checkDict_(deal, prev, 'potok', dicts.potoki, 'поток');
+  checkDict_(deal, prev, 'channel', dicts.channels, 'канал');
+  checkDict_(deal, prev, 'payMethod', dicts.payMethods, 'способ оплаты');
+  checkDict_(deal, prev, 'lostReason', dicts.lostReasons, 'причину отказа');
+  deal.prospect = toBool_(deal.prospect);
 
   if (!prev || (prev.createdAt !== deal.createdAt)) {
     if (isDate_(deal.createdAt) && deal.createdAt.getTime() > now.getTime() + 5 * 60000) {
@@ -268,7 +285,9 @@ function applyDealRules_(deal, prev, ctx) {
   return deal;
 }
 
-function checkDict_(deal, field, list, label) {
+/** Значение из справочника проверяется, только если его поменяли: старые записи из импорта не мешают править остальное. */
+function checkDict_(deal, prev, field, list, label) {
+  if (prev && prev[field] === deal[field]) return;
   if (deal[field] && list.indexOf(deal[field]) < 0) {
     throw userError_('Неизвестное значение «' + deal[field] + '» — выберите ' + label + ' из списка.', field);
   }
