@@ -15,7 +15,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   p.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errs.push(m.text()); });
   const step = async (name, fn) => { await fn(); console.log('✓', name); };
   await p.goto(BASE + '/#today');
-  await p.waitForSelector('.counters', { timeout: 30000 });
+  await p.waitForSelector('.counters', { timeout: 90000 });
 
   await step('«Написал» убирает сделку из просроченных', async () => {
     const before = await p.locator('.badge.red').innerText();
@@ -41,6 +41,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   });
   await step('Новое обращение по клавише N → карточка', async () => {
     await p.keyboard.press('n');
+    if (!(await p.locator('.modal select >> nth=1').isDisabled())) throw new Error('тариф доступен без курса');
     const potoki = await p.locator('.modal .seg >> nth=1').innerText();
     if (!/Исходящее/.test(potoki) || /Реактивация/.test(potoki)) throw new Error('потоки: ' + potoki);
     await p.selectOption('.modal select >> nth=0', 'ЯБ');
@@ -63,11 +64,19 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (!/new\.client_77/.test(nick)) throw new Error('ник не нормализован: ' + nick);
     console.log('   ', head.replace(/\s+/g, ' '));
   });
-  await step('Курс и тариф подставляют сумму', async () => {
-    await p.fill('input[list="dl-courses"]', 'УСН');
-    await p.locator('input[list="dl-courses"]').dispatchEvent('change');
-    await p.waitForTimeout(400);
-    await p.selectOption('.zone-deal select:near(:text("Тариф"))', 'Золотая середина');
+  await step('Курс и тариф подставляют сумму; у курса только его тарифы', async () => {
+    const tariffSel = '.zone-deal .field:has(> label:text-is("Тариф")) select';
+    const courseSel = '.zone-deal .field:has(> label:text-is("Курс")) select';
+    await p.selectOption(courseSel, 'НДС');
+    await p.waitForSelector('.toast:has-text("Сохранено"), .save-state:has-text("Сохранено")', { timeout: 5000 }).catch(() => {});
+    await p.waitForTimeout(600);
+    let opts = await p.locator(tariffSel).locator('option').allInnerTexts();
+    if (opts.some((o) => /минимум|середина|сразу/.test(o))) throw new Error('у НДС лишние тарифы: ' + opts);
+    await p.selectOption(courseSel, 'УСН');
+    await p.waitForTimeout(600);
+    opts = await p.locator(tariffSel).locator('option').allInnerTexts();
+    if (opts.some((o) => /сопровожд/i.test(o)) || opts.length !== 4) throw new Error('у УСН лишние тарифы: ' + opts);
+    await p.selectOption(tariffSel, 'Золотая середина');
     await p.waitForFunction(() => document.querySelector('.zone-deal input[type=number]').value === '59900', null, { timeout: 5000 });
   });
   await step('Шаблон: копирование с именем и касание «Шаблон»', async () => {

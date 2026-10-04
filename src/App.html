@@ -121,14 +121,13 @@
   /** Курсы из «Тарифы» (уникальные, в порядке листа). */
   function courseList() { return store.boot.courses || []; }
   /**
-   * Тарифы для выпадающего списка: активные тарифы курса; если у курса их нет (или курс не выбран) —
-   * все активные названия. Выключенные в «Тарифы» (Активен = FALSE) не предлагаются.
+   * Тарифы для выпадающего списка — только активные тарифы выбранного курса.
+   * Курс не выбран или это комбо / свободный текст — список пуст, сумма вводится вручную.
    */
   function tariffOptions(course, current) {
     var c = String(course || '').trim();
-    var list = store.boot.tariffs.filter(function (t) { return t.course === c; });
     var names = [];
-    (list.length ? list : store.boot.tariffs).forEach(function (t) { if (names.indexOf(t.tariff) < 0) names.push(t.tariff); });
+    store.boot.tariffs.forEach(function (t) { if (t.course === c && names.indexOf(t.tariff) < 0) names.push(t.tariff); });
     if (current && names.indexOf(current) < 0) names.push(current);
     return names;
   }
@@ -587,7 +586,8 @@
         loading: true, error: '', deal: null, client: null, touches: [], otherDeals: [],
         errField: '', clientErr: '', stageTarget: '', showTpl: false,
         touch: { type: 'Написал', text: '' }, touchBusy: false,
-        edit: {}
+        edit: {},
+        courseCustomForced: false
       };
     },
     template:
@@ -651,10 +651,12 @@
       '          <div class="field grow"><label>Канал</label><select class="select" :class="err(\'channel\')" :value="deal.channel" @change="saveDeal(\'channel\', $event.target.value)"><option v-for="s in dicts.channels" :key="s">{{ s }}</option></select></div>' +
       '        </div>' +
       '        <div class="field"><label>{{ deal.potok === \'Исходящее\' ? \'О чём написали клиенту\' : \'Запрос клиента\' }}</label><textarea class="textarea" :class="err(\'request\')" v-model="edit.request" @blur="saveIfChanged(\'request\')"></textarea></div>' +
-      '        <div class="field"><label>Курс</label><input class="input" :class="err(\'course\')" list="dl-courses" v-model="edit.course" @change="saveIfChanged(\'course\')" placeholder="ЯБ, УСН, УСН + ОСН…"></div>' +
-      '        <div class="field"><label>Тариф</label><select class="select" :class="err(\'tariff\')" v-model="edit.tariff" @change="saveIfChanged(\'tariff\')"><option value="">—</option><option v-for="t in tariffNames" :key="t" :value="t">{{ t }}{{ priceOf(t) ? " · " + rub(priceOf(t)) : "" }}</option></select>' +
+      '        <div class="field"><label>Курс</label>' +
+      '          <select v-if="!courseCustom" class="select" :class="err(\'course\')" :value="edit.course" @change="onCourse($event.target.value)"><option value="">— не выбран —</option><option v-for="c in courses" :key="c" :value="c">{{ c }}</option><option value="__other">Другое / комбо…</option></select>' +
+      '          <template v-else><input class="input" :class="err(\'course\')" v-model="edit.course" ref="courseInput" @change="onCourse(edit.course)" placeholder="Например: УСН + ОСН">' +
+      '            <div class="inline-links"><a href="#" @click.prevent="courseCustomForced = false; edit.course = deal.course; courseCustomOff()">выбрать из списка</a></div></template></div>' +
+      '        <div class="field"><label>Тариф</label><select class="select" :class="err(\'tariff\')" v-model="edit.tariff" :disabled="!tariffNames.length" @change="saveIfChanged(\'tariff\')"><option value="">—</option><option v-for="t in tariffNames" :key="t" :value="t">{{ t }}{{ priceOf(t) ? " · " + rub(priceOf(t)) : "" }}</option></select>' +
       '          <div class="hint" v-if="tariffHint">{{ tariffHint }}</div></div>' +
-      '        <datalist id="dl-courses"><option v-for="c in courses" :key="c" :value="c"></option></datalist>' +
       '        <div class="row" style="align-items:flex-start">' +
       '          <div class="field grow"><label>Сумма, ₽</label><input class="input" :class="err(\'amount\')" type="number" min="0" step="100" v-model="edit.amount" @change="saveIfChanged(\'amount\')"></div>' +
       '          <div class="field grow"><label>Способ оплаты</label><select class="select" :class="err(\'payMethod\')" :value="deal.payMethod" @change="saveDeal(\'payMethod\', $event.target.value)"><option value="">—</option><option v-for="s in dicts.payMethods" :key="s">{{ s }}</option></select></div>' +
@@ -698,18 +700,18 @@
         ];
       },
       courses: function () { return courseList(); },
-      tariffsForCourse: function () {
-        var c = String(this.edit.course || '').trim();
-        return store.boot.tariffs.filter(function (t) { return t.course === c; });
-      },
       tariffHint: function () {
         var c = String(this.edit.course || '').trim();
-        if (!c) return '';
+        if (!c) return 'Сначала выберите курс.';
+        if (tariffOptions(c, '').length) return '';
         if (/\+|комбо/i.test(c)) return 'Комбо — сумму введите вручную.';
-        if (!this.tariffsForCourse.length) return 'Для этого курса нет тарифов в справочнике — сумму введите вручную.';
-        return '';
+        return 'Для этого курса нет тарифов в справочнике — сумму введите вручную.';
       },
       tariffNames: function () { return tariffOptions(this.edit.course, this.deal.tariff); },
+      courseCustom: function () {
+        var c = String(this.edit.course || '').trim();
+        return this.courseCustomForced || (c !== '' && courseList().indexOf(c) < 0);
+      },
       quick: function () { return [{ n: 0, label: 'Сегодня' }, { n: 1, label: '+1 день' }, { n: 2, label: '+2 дня' }, { n: 7, label: '+1 неделя' }]; }
     },
     watch: { id: { immediate: true, handler: function () { this.load(); } } },
@@ -762,12 +764,39 @@
           self.resetEdit();
         });
       },
+      savePatch: function (patch) {
+        var self = this;
+        return save(call('updateDeal', this.deal.id, patch)).then(function (res) {
+          self.courseCustomForced = false;
+          self.applyResult(res);
+        }, function (err) {
+          self.errField = err.field || Object.keys(patch)[0];
+          self.resetEdit();
+        });
+      },
       saveIfChanged: function (field) {
         var v = this.edit[field];
         var cur = this.deal[field];
         if (String(v === null || v === undefined ? '' : v).trim() === String(cur === null || cur === undefined ? '' : cur).trim()) return;
         this.saveDeal(field, v);
       },
+      /** Смена курса: тариф, которого нет у нового курса, сбрасывается в том же сохранении. */
+      onCourse: function (value) {
+        var self = this;
+        if (value === '__other') {
+          this.courseCustomForced = true;
+          this.edit.course = '';
+          nextTick(function () { if (self.$refs.courseInput) self.$refs.courseInput.focus(); });
+          return;
+        }
+        var course = String(value || '').trim();
+        this.edit.course = course;
+        if (course === String(this.deal.course || '').trim()) return;
+        var patch = { course: course };
+        if (this.deal.tariff && tariffOptions(course, '').indexOf(this.deal.tariff) < 0) patch.tariff = '';
+        this.savePatch(patch);
+      },
+      courseCustomOff: function () { this.courseCustomForced = false; },
       quickDate: function (n) {
         this.saveDeal('taskAt', dayAt(n, hhmmOf(this.deal.taskAt, this.settings.TASK_DEFAULT_TIME)));
       },
@@ -861,7 +890,7 @@
       '        <div class="field grow"><label>Курс</label>' +
       '          <select v-if="!customCourse" class="select" v-model="f.course" @change="onCourse"><option value="">— не выбран —</option><option v-for="c in courses" :key="c" :value="c">{{ c }}</option><option value="__other">Другое / комбо…</option></select>' +
       '          <input v-else class="input" v-model="f.course" ref="courseInput" placeholder="Например: УСН + ОСН"></div>' +
-      '        <div class="field grow"><label>Тариф</label><select class="select" v-model="f.tariff"><option value="">— не выбран —</option><option v-for="t in tariffNames" :key="t" :value="t">{{ t }}</option></select></div>' +
+      '        <div class="field grow"><label>Тариф</label><select class="select" v-model="f.tariff" :disabled="!tariffNames.length"><option value="">{{ f.course ? (tariffNames.length ? "— не выбран —" : "нет тарифов — сумма вручную") : "сначала выберите курс" }}</option><option v-for="t in tariffNames" :key="t" :value="t">{{ t }}</option></select></div>' +
       '      </div>' +
       '      <button type="button" class="btn sm prospect-btn" :class="{on: f.prospect}" @click="f.prospect = !f.prospect">{{ f.prospect ? "★ Есть перспектива оплаты" : "☆ Перспектива оплаты" }}</button>' +
       '    </div>' +
