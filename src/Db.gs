@@ -314,10 +314,18 @@ function loadRef_() {
     };
   });
 
+  // Настройки читаем так, как они видны в ячейке: «10:00» Google Таблица превращает во время
+  // с датой 1899 года, и при чтении как Date часы сдвигаются из-за старого смещения часового пояса.
   var settings = {};
-  new Table_(SHEET.SETTINGS).all().forEach(function (s) {
-    var key = String(s.key).trim();
-    if (key) settings[key] = s.value instanceof Date ? formatTime_(s.value) : s.value;
+  var st = new Table_(SHEET.SETTINGS);
+  var shown = st.sheet.getDataRange().getDisplayValues().slice(1);
+  st.data.forEach(function (row, i) {
+    var key = String(row[st.col.key]).trim();
+    if (!key) return;
+    var raw = row[st.col.value];
+    var text = String((shown[i] || [])[st.col.value] || '').trim();
+    if (raw instanceof Date || /^\d{1,2}:\d{2}/.test(text)) settings[key] = normHhmm_(text);
+    else settings[key] = typeof raw === 'number' ? raw : text;
   });
 
   return { dicts: dicts, tariffs: tariffs, templates: templates, users: users, settings: settings };
@@ -367,9 +375,14 @@ function fromIso_(v) {
   return d;
 }
 
-/** Время ячейки «10:00» читается как Date; превращаем обратно в строку ЧЧ:ММ по Москве. */
-function formatTime_(d) {
-  return Utilities.formatDate(d, 'Europe/Moscow', 'HH:mm');
+/** «10:00:00», «8:30 PM» → «10:00», «20:30». */
+function normHhmm_(text) {
+  var m = /^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])?/.exec(String(text).trim());
+  if (!m) return String(text).trim();
+  var h = +m[1];
+  if (m[3] && /p/i.test(m[3]) && h < 12) h += 12;
+  if (m[3] && /a/i.test(m[3]) && h === 12) h = 0;
+  return (h < 10 ? '0' : '') + h + ':' + m[2];
 }
 
 /** Объект строки → JSON для клиента: даты в ISO, без служебного _row. */

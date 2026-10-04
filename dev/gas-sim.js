@@ -18,9 +18,36 @@ function reviveCell(v) {
   return v === null || v === undefined ? '' : v;
 }
 
+/**
+ * Как Google Таблицы: строка «10:00» при записи становится временем — Date 30.12.1899.
+ * В 1899 году у Москвы было смещение +2:30:17, поэтому такая Date, прочитанная «по-современному»,
+ * даёт сдвинутые часы. Симулятор воспроизводит это, а текст ячейки отдаёт через getDisplayValues.
+ */
+function sheetValue(v) {
+  if (typeof v === 'string' && /^\d{1,2}:\d{2}(:\d{2})?$/.test(v.trim())) {
+    const [h, m] = v.trim().split(':').map(Number);
+    const d = new SimDate(Date.UTC(1899, 11, 30, h, m) - (2 * 3600 + 30 * 60 + 17) * 1000);
+    d.__shown = pad(h) + ':' + pad(m) + ':00';
+    return d;
+  }
+  return v;
+}
+
+function shownValue(v) {
+  if (v === '' || v === undefined || v === null) return '';
+  if (v.__shown) return v.__shown;
+  if (typeof v.toISOString === 'function') return formatDate(v, '', 'dd.MM.yyyy HH:mm:ss');
+  if (v === true) return 'TRUE';
+  if (v === false) return 'FALSE';
+  return String(v);
+}
+
 class Range {
   constructor(sheet, row, col, nr, nc) {
     Object.assign(this, { sheet, row, col, nr, nc });
+  }
+  getDisplayValues() {
+    return this.getValues().map((r) => r.map(shownValue));
   }
   getValues() {
     const out = [];
@@ -45,7 +72,7 @@ class Range {
     for (let r = 0; r < this.nr; r++) {
       const gr = this.row - 1 + r;
       while (this.sheet.grid.length <= gr) this.sheet.grid.push([]);
-      for (let c = 0; c < this.nc; c++) this.sheet.grid[gr][this.col - 1 + c] = values[r][c];
+      for (let c = 0; c < this.nc; c++) this.sheet.grid[gr][this.col - 1 + c] = sheetValue(values[r][c]);
     }
     return this;
   }
@@ -63,7 +90,7 @@ class Range {
 class Sheet {
   constructor(name, rows) {
     this.name = name;
-    this.grid = rows.map((r) => r.map(reviveCell));
+    this.grid = rows.map((r) => r.map((v) => sheetValue(reviveCell(v))));
     this.maxRows = Math.max(1000, this.grid.length);
     this.maxCols = Math.max(26, ...this.grid.map((r) => r.length));
     this.frozen = 0;
@@ -109,6 +136,8 @@ class Spreadsheet {
   constructor(workbook) {
     this.sheets = Object.keys(workbook).map((n) => new Sheet(n, workbook[n]));
   }
+  getSpreadsheetTimeZone() { return this.tz || 'Europe/Moscow'; }
+  setSpreadsheetTimeZone(tz) { this.tz = tz; }
   getSheetByName(n) { return this.sheets.find((s) => s.name === n) || null; }
   insertSheet(n) {
     const s = new Sheet(n, []);

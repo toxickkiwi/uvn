@@ -51,6 +51,12 @@ function setupSpreadsheet() {
     var ss = SpreadsheetApp.getActive();
     var log = [];
 
+    // ТЗ: часовой пояс Europe/Moscow. Таблица из .xlsx получает пояс аккаунта, и даты в ней сдвигаются.
+    if (ss.getSpreadsheetTimeZone() !== 'Europe/Moscow') {
+      log.push('часовой пояс таблицы: ' + ss.getSpreadsheetTimeZone() + ' → Europe/Moscow');
+      ss.setSpreadsheetTimeZone('Europe/Moscow');
+    }
+
     Object.keys(SCHEMA).forEach(function (name) {
       ensureSheet_(ss, name, values_(SCHEMA[name]), log);
     });

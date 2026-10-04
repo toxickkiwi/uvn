@@ -41,6 +41,14 @@ test('повторный запуск ничего не меняет', () => {
   assert.deepStrictEqual(names.map((n) => sim.ss.dump(n)), snap);
 });
 
+test('часовой пояс таблицы ставится на Москву', () => {
+  const sim = create({ workbook });
+  sim.ss.tz = 'America/Los_Angeles';
+  sim.ctx.setupSpreadsheet();
+  assert.strictEqual(sim.ss.getSpreadsheetTimeZone(), 'Europe/Moscow');
+  assert.ok(/Europe\/Moscow/.test(sim.state.alerts[0]));
+});
+
 test('пустая таблица: создаются все листы, справочники и настройки', () => {
   const sim = create({ workbook: { 'Лист1': [] } });
   sim.ctx.setupSpreadsheet();
