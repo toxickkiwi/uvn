@@ -119,11 +119,11 @@
     return 'nick';
   }
   /** Курсы из «Тарифы» (уникальные, в порядке листа). */
-  function courseList() {
-    var seen = {};
-    return store.boot.tariffs.map(function (t) { return t.course; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
-  }
-  /** Тарифы для выпадающего списка: тарифы курса, а если курс не из списка — все названия тарифов. */
+  function courseList() { return store.boot.courses || []; }
+  /**
+   * Тарифы для выпадающего списка: активные тарифы курса; если у курса их нет (или курс не выбран) —
+   * все активные названия. Выключенные в «Тарифы» (Активен = FALSE) не предлагаются.
+   */
   function tariffOptions(course, current) {
     var c = String(course || '').trim();
     var list = store.boot.tariffs.filter(function (t) { return t.course === c; });
@@ -697,10 +697,7 @@
           { key: 'phone', label: 'Телефон', type: 'tel' }
         ];
       },
-      courses: function () {
-        var seen = {};
-        return store.boot.tariffs.map(function (t) { return t.course; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
-      },
+      courses: function () { return courseList(); },
       tariffsForCourse: function () {
         var c = String(this.edit.course || '').trim();
         return store.boot.tariffs.filter(function (t) { return t.course === c; });
@@ -876,10 +873,7 @@
       dicts: function () { return store.boot.dicts; },
       kind: function () { return detectContact(this.f.contact); },
       kindName: function () { return CONTACT_NAMES[this.kind] || ''; },
-      courses: function () {
-        var seen = {};
-        return store.boot.tariffs.map(function (t) { return t.course; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
-      },
+      courses: function () { return courseList(); },
       tariffNames: function () { return tariffOptions(this.f.course, ''); },
       outgoing: function () { return this.f.potok === 'Исходящее'; }
     },

@@ -13,6 +13,9 @@ function getBootstrap() {
       user: { email: user.email, name: user.name, role: user.role },
       dicts: ref.dicts,
       tariffs: ref.tariffs.filter(function (t) { return t.active; }),
+      // Курсы — из всех строк «Тарифы»: курс остаётся в списке, даже если все его тарифы выключены.
+      courses: ref.tariffs.map(function (t) { return t.course; })
+        .filter(function (c, i, a) { return c && a.indexOf(c) === i; }),
       templates: ref.templates.filter(function (t) { return t.active; }),
       settings: ref.settings,
       appUrl: ScriptApp.getService().getUrl() || '',
