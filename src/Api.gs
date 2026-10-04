@@ -67,9 +67,12 @@ function dealView_(d, client, stats) {
   v.nick = client ? String(client.nick || '') : '';
   v.dialogUrl = client ? String(client.dialogUrl || '') : '';
   v.clientCheck = client ? String(client.check || '') : '';
-  var s = stats ? stats[String(d.id)] : null;
-  v.lastTouchAt = s && s.last ? s.last.toISOString() : '';
-  v.answered = s ? s.answered : false;
+  if (stats) {
+    // Без stats (ответ на запись) этих полей нет — клиент оставляет свои значения.
+    var s = stats[String(d.id)];
+    v.lastTouchAt = s && s.last ? s.last.toISOString() : '';
+    v.answered = s ? s.answered : false;
+  }
   v.imported = String(d.source || '') !== SOURCE_CRM;
   return v;
 }

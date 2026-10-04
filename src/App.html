@@ -1,49 +1,1020 @@
 <script>
-  /**
-   * App.html — клиентская часть. На этапе 1 только проверяет связь с сервером
-   * и показывает, под кем выполнен вход. Экраны на Vue появятся на этапе 3.
-   */
-  (function () {
-    function toast(text, isError) {
-      var el = document.getElementById('toast');
-      el.textContent = text;
-      el.className = 'toast' + (isError ? ' error' : '');
-      el.hidden = false;
-      clearTimeout(toast._t);
-      toast._t = setTimeout(function () { el.hidden = true; }, isError ? 6000 : 2500);
-    }
+/**
+ * App.html — клиентская часть CRM на Vue 3 (global build).
+ * Экраны: «Сегодня» (#today), карточка сделки (#deal/D001), окно «Новое обращение».
+ * Маршрут хранится в хэше адреса через google.script.history (страница живёт в iframe Google).
+ */
+(function () {
+  'use strict';
+  var Vue = window.Vue;
+  if (!Vue) {
+    document.getElementById('app').innerHTML = '<div class="loading">Не удалось загрузить интерфейс. Проверьте интернет и обновите страницу.</div>';
+    return;
+  }
+  var reactive = Vue.reactive, computed = Vue.computed, ref = Vue.ref, watch = Vue.watch, nextTick = Vue.nextTick;
 
-    /** Вызов серверной функции как Promise; ответ { ok, data | error }. */
-    function call(name) {
-      var args = Array.prototype.slice.call(arguments, 1);
-      return new Promise(function (resolve, reject) {
-        var runner = google.script.run
-          .withSuccessHandler(function (res) {
-            if (res && res.ok) resolve(res.data);
-            else reject(res || { error: 'Пустой ответ сервера' });
-          })
-          .withFailureHandler(function (err) {
-            reject({ error: 'Нет связи с сервером: ' + (err && err.message ? err.message : err) });
-          });
-        runner[name].apply(runner, args);
-      });
-    }
+  /* ================= Сервер ================= */
 
-    function esc(s) {
-      return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
-    }
-
-    call('getBootstrap').then(function (data) {
-      document.getElementById('who').textContent = data.user.name + ' · ' + data.user.role;
-      document.getElementById('main').innerHTML =
-        '<div class="card"><p>Здравствуйте, ' + esc(data.user.name) + '! Приложение подключено к таблице.</p>' +
-        '<p class="muted">Стадий в справочнике: ' + data.dicts.stages.length +
-        ', активных тарифов: ' + data.tariffs.length +
-        ', активных шаблонов: ' + data.templates.length + '.</p>' +
-        '<p class="muted">Экраны «Сегодня», «Воронка», карточка сделки появятся на следующих этапах.</p></div>';
-    }).catch(function (res) {
-      document.getElementById('main').innerHTML = '<div class="card"><p>' + esc(res.error) + '</p></div>';
-      toast(res.error, true);
+  /** Вызов функции Api.gs. Promise с data или отказ { error, field }. */
+  function call(name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      var runner = google.script.run
+        .withSuccessHandler(function (res) {
+          if (res && res.ok) resolve(res.data);
+          else reject(res || { error: 'Пустой ответ сервера. Обновите страницу.' });
+        })
+        .withFailureHandler(function (err) {
+          var msg = err && err.message ? err.message : String(err);
+          if (/authorization|авторизац|permission|доступ/i.test(msg)) msg = 'Нет доступа или истекла авторизация. Обновите страницу.';
+          reject({ error: 'Нет связи с сервером: ' + msg });
+        });
+      runner[name].apply(runner, args);
     });
-  })();
+  }
+
+  /* ================= Даты (Москва, UTC+3 круглый год) ================= */
+
+  var MSK = 3 * 3600 * 1000;
+  var DAY = 24 * 3600 * 1000;
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function msk(iso) {
+    var d = new Date(new Date(iso).getTime() + MSK);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), hh: d.getUTCHours(), mi: d.getUTCMinutes() };
+  }
+  function nowMs() { return Date.now(); }
+  function dayStart(ms, add) {
+    var s = ms + MSK;
+    return s - (((s % DAY) + DAY) % DAY) - MSK + (add || 0) * DAY;
+  }
+  /** «03.10, 10:00»; без времени, если 00:00; с годом, если не текущий. */
+  function fmtDate(iso, withTime) {
+    if (!iso) return '';
+    var p = msk(iso);
+    var s = pad(p.d) + '.' + pad(p.m);
+    if (p.y !== msk(new Date().toISOString()).y) s += '.' + p.y;
+    if (withTime !== false && (p.hh || p.mi)) s += ', ' + pad(p.hh) + ':' + pad(p.mi);
+    return s;
+  }
+  /** Для строк «Сегодня»: «10:00», «вчера», «01.10». */
+  function fmtWhen(iso) {
+    if (!iso) return 'нет даты';
+    var t = new Date(iso).getTime();
+    var p = msk(iso);
+    var time = (p.hh || p.mi) ? pad(p.hh) + ':' + pad(p.mi) : '';
+    var today = dayStart(nowMs(), 0);
+    if (t >= today && t < today + DAY) return time || 'сегодня';
+    if (t >= today - DAY && t < today) return 'вчера' + (time ? ', ' + time : '');
+    if (t >= today + DAY && t < today + 2 * DAY) return 'завтра' + (time ? ', ' + time : '');
+    return fmtDate(iso);
+  }
+  function daysAgo(iso) {
+    if (!iso) return null;
+    return Math.floor((dayStart(nowMs(), 0) - dayStart(new Date(iso).getTime(), 0)) / DAY);
+  }
+  function toInputDT(iso) {
+    if (!iso) return '';
+    var p = msk(iso);
+    return p.y + '-' + pad(p.m) + '-' + pad(p.d) + 'T' + pad(p.hh) + ':' + pad(p.mi);
+  }
+  function toInputDate(iso) { return iso ? toInputDT(iso).slice(0, 10) : ''; }
+  function fromInputDT(v) {
+    if (!v) return '';
+    var m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(v);
+    if (!m) return '';
+    return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)) - MSK).toISOString();
+  }
+  function hhmmOf(iso, fallback) {
+    if (!iso) return fallback;
+    var p = msk(iso);
+    return (p.hh || p.mi) ? pad(p.hh) + ':' + pad(p.mi) : fallback;
+  }
+  /** День «сегодня + n» в московском времени со временем hh:mm → ISO. */
+  function dayAt(n, hhmm) {
+    var m = /^(\d{1,2}):(\d{2})/.exec(hhmm || '10:00');
+    return new Date(dayStart(nowMs(), n) + ((m ? +m[1] : 10) * 60 + (m ? +m[2] : 0)) * 60000).toISOString();
+  }
+
+  /* ================= Мелочи ================= */
+
+  function rub(v) {
+    if (v === '' || v === null || v === undefined) return '';
+    var n = Math.round(Number(String(v).replace(/\s/g, '').replace(',', '.')) || 0);
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+  }
+  function stageClass(s) { return 'st-' + String(s || '').replace(/\s+/g, ''); }
+  function chLabel(c) { return { 'Инстаграм': 'Insta', 'GetCourse': 'GC', 'Почта': 'Почта' }[c] || c || '—'; }
+  function fill(tpl, vars) { return String(tpl || '').replace(/\{id\}/g, vars.id || ''); }
+  function digits(s) { return String(s || '').replace(/\D/g, ''); }
+
+  /** Как detectContact_ в Rules.gs — чтобы сразу показать, что распознано. */
+  function detectContact(raw) {
+    var s = String(raw || '').trim();
+    if (!s) return '';
+    if (/instagram\.com\//i.test(s) && !/instagram\.com\/direct\//i.test(s)) return 'nick';
+    if (/^https?:\/\//i.test(s) || /^(www\.)?[\w-]+(\.[\w-]+)+\/\S*/.test(s)) return 'dialogUrl';
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) return 'email';
+    if (/^[\d\s()+\-]+$/.test(s) && digits(s).length >= 10) return 'phone';
+    if (/^\d+$/.test(s)) return 'gcId';
+    return 'nick';
+  }
+  var CONTACT_NAMES = { nick: 'ник Инстаграм', dialogUrl: 'ссылка на диалог', email: 'почта', phone: 'телефон', gcId: 'ID GetCourse' };
+
+  /** Как fillTemplate_ в Rules.gs. Возвращает { text, html } — html подсвечивает пустые переменные. */
+  function fillTemplate(text, vars) {
+    var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var re = /\{(Имя|Курс|Тариф|Сумма|Менеджер)\}/g;
+    var plain = String(text || '').replace(re, function (_, n) { return vars[n] || ''; });
+    var html = '';
+    var last = 0;
+    String(text || '').replace(re, function (m, n, idx) {
+      html += esc(text.slice(last, idx));
+      html += vars[n] ? esc(vars[n]) : '<mark>{' + n + '}</mark>';
+      last = idx + m.length;
+      return m;
+    });
+    html += esc(String(text || '').slice(last));
+    return { text: plain, html: html };
+  }
+
+  function copyText(text) {
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      return ok ? Promise.resolve() : Promise.reject(new Error('copy'));
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(fallback);
+    }
+    return fallback();
+  }
+
+  /* ================= Общее состояние ================= */
+
+  var store = reactive({
+    boot: null,
+    bootError: '',
+    route: { name: 'today', id: '' },
+    toasts: [],
+    saving: 0,
+    savedAt: 0,
+    newLeadOpen: false,
+    todayVersion: 0
+  });
+
+  function toast(text, isError) {
+    var t = { id: Math.random(), text: text, error: !!isError };
+    store.toasts.push(t);
+    setTimeout(function () {
+      var i = store.toasts.indexOf(t);
+      if (i >= 0) store.toasts.splice(i, 1);
+    }, isError ? 6000 : 2500);
+  }
+
+  /** Обёртка над записью: индикатор «Сохранение…» и всплывающая ошибка. */
+  function save(promise) {
+    store.saving++;
+    return promise.then(function (data) {
+      store.saving--;
+      store.savedAt = Date.now();
+      return data;
+    }, function (err) {
+      store.saving--;
+      toast(err.error || 'Ошибка сохранения', true);
+      throw err;
+    });
+  }
+
+  function dialogLink(d) {
+    if (!d) return '';
+    if (d.channel === 'Инстаграм' && d.nick) return 'https://instagram.com/' + d.nick;
+    if (d.dialogUrl) return d.dialogUrl;
+    if (d.nick) return 'https://instagram.com/' + d.nick;
+    return '';
+  }
+
+  /* ================= Маршрутизация ================= */
+
+  function parseHash(h) {
+    h = String(h || '').replace(/^#/, '');
+    var m = /^deal\/([\w-]+)/.exec(h);
+    if (m) return { name: 'deal', id: m[1] };
+    return { name: 'today', id: '' };
+  }
+  function go(hash) {
+    store.route = parseHash(hash);
+    try { google.script.history.push(null, null, hash); } catch (e) { /* локальный просмотр */ }
+    window.scrollTo(0, 0);
+  }
+
+  /* ================= Компоненты ================= */
+
+  var InlineField = {
+    props: ['value', 'placeholder', 'type', 'error', 'multiline'],
+    emits: ['save'],
+    data: function () { return { editing: false, draft: '' }; },
+    template:
+      '<div>' +
+      '  <span v-if="!editing" class="inline-val" :class="{placeholder: !value, \'has-error\': error}" @click="start" tabindex="0" @keydown.enter.prevent="start">{{ value || placeholder || "добавить" }}</span>' +
+      '  <textarea v-else-if="multiline" ref="inp" class="textarea" :class="{\'has-error\': error}" v-model="draft" @blur="finish" @keydown.esc="cancel"></textarea>' +
+      '  <input v-else ref="inp" class="input" :class="{\'has-error\': error}" :type="type || \'text\'" v-model="draft" @blur="finish" @keydown.enter.prevent="$event.target.blur()" @keydown.esc="cancel">' +
+      '</div>',
+    methods: {
+      start: function () {
+        var self = this;
+        this.draft = this.value || '';
+        this.editing = true;
+        nextTick(function () { if (self.$refs.inp) self.$refs.inp.focus(); });
+      },
+      cancel: function () { this.draft = this.value || ''; this.editing = false; },
+      finish: function () {
+        this.editing = false;
+        if (String(this.draft).trim() !== String(this.value || '').trim()) this.$emit('save', String(this.draft).trim());
+      }
+    }
+  };
+
+  /* ---------- Строка сделки на «Сегодня» ---------- */
+  var DealRow = {
+    props: ['d', 'late', 'alertMin'],
+    emits: ['open', 'wrote', 'plus'],
+    template:
+      '<div class="drow" :class="{alert: isAlert}" @click="$emit(\'open\', d)">' +
+      '  <div class="drow-main">' +
+      '    <div class="drow-title">' +
+      '      <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
+      '      <span class="drow-name">{{ d.clientName || "Без имени" }}</span>' +
+      '      <span class="chip" :class="\'ch-\' + d.channel">{{ chLabel(d.channel) }}</span>' +
+      '      <span v-if="d.course" class="muted">{{ d.course }}</span>' +
+      '      <span class="stage" :class="stageClass(d.stage)">{{ d.stage }}</span>' +
+      '    </div>' +
+      '    <div class="drow-task"><span class="drow-when" :class="{late: late}">{{ fmtWhen(d.taskAt) }}</span> · {{ d.nextTask || d.request || "без задачи" }}' +
+      '      <span v-if="ago !== null" class="faint"> · {{ agoText }}</span></div>' +
+      '  </div>' +
+      '  <div class="drow-actions" @click.stop>' +
+      '    <button class="btn sm" @click="$emit(\'wrote\', d)" :disabled="busy" title="Добавить касание «Написал» и перенести задачу">Написал</button>' +
+      '    <button class="btn sm" @click="$emit(\'plus\', d)" :disabled="busy">+1 день</button>' +
+      '    <a v-if="link" class="btn sm" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
+      '  </div>' +
+      '</div>',
+    computed: {
+      busy: function () { return !!this.d._busy; },
+      link: function () { return dialogLink(this.d); },
+      ago: function () { return daysAgo(this.d.lastTouchAt); },
+      agoText: function () {
+        var n = this.ago;
+        if (n === 0) return 'касание сегодня';
+        return n + ' дн. без касаний';
+      },
+      isAlert: function () {
+        return this.d.stage === 'Новое' && this.d.createdAt &&
+          Date.now() - new Date(this.d.createdAt).getTime() > (Number(this.alertMin) || 10) * 60000;
+      }
+    },
+    methods: { fmtWhen: fmtWhen, chLabel: chLabel, stageClass: stageClass }
+  };
+
+  /* ---------- Экран «Сегодня» ---------- */
+  var TodayView = {
+    components: { DealRow: DealRow },
+    data: function () { return { loading: true, error: '', data: null, limits: { overdue: 30, today: 30, fresh: 30 } }; },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Сегодня</h1><span class="muted">{{ todayLabel }}</span>' +
+      '    <button class="btn ghost sm" style="margin-left:auto" @click="load" :disabled="loading">Обновить</button></div>' +
+      '  <div v-if="loading && !data" class="loading">Загружаю…</div>' +
+      '  <div v-else-if="error" class="panel">{{ error }}</div>' +
+      '  <template v-else-if="data">' +
+      '    <div class="counters">' +
+      '      <div class="counter"><div class="num">{{ data.counters.created }}</div><div class="cap">новых обращений</div></div>' +
+      '      <div class="counter"><div class="num">{{ data.counters.touches }}</div><div class="cap">касаний</div></div>' +
+      '      <div class="counter"><div class="num">{{ data.counters.paid }}</div><div class="cap">оплат</div></div>' +
+      '      <div class="counter"><div class="num">{{ rub(data.counters.paidSum) || "0 ₽" }}</div><div class="cap">сумма оплат</div></div>' +
+      '    </div>' +
+      '    <section class="block" v-for="b in blocks" :key="b.key">' +
+      '      <div class="block-head"><h2>{{ b.title }}</h2><span class="badge" :class="{red: b.key === \'overdue\' && data[b.key].length}">{{ data[b.key].length }}</span></div>' +
+      '      <div class="list">' +
+      '        <div v-if="!data[b.key].length" class="empty">Всё сделано</div>' +
+      '        <deal-row v-for="d in data[b.key].slice(0, limits[b.key])" :key="d.id" :d="d" :late="b.key === \'overdue\'" :alert-min="alertMin"' +
+      '          @open="open" @wrote="wrote" @plus="plusDay"></deal-row>' +
+      '        <button v-if="data[b.key].length > limits[b.key]" class="more" @click="limits[b.key] += 50">Показать ещё {{ data[b.key].length - limits[b.key] }}</button>' +
+      '      </div>' +
+      '    </section>' +
+      '  </template>' +
+      '</div>',
+    computed: {
+      blocks: function () {
+        return [
+          { key: 'overdue', title: 'Просрочено' },
+          { key: 'today', title: 'На сегодня' },
+          { key: 'fresh', title: 'Без ответа' }
+        ];
+      },
+      alertMin: function () { return store.boot.settings.NEW_DEAL_ALERT_MIN; },
+      todayLabel: function () {
+        return new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' });
+      }
+    },
+    created: function () {
+      this.load();
+      var self = this;
+      this._v = watch(function () { return store.todayVersion; }, function () { self.load(); });
+    },
+    unmounted: function () { if (this._v) this._v(); },
+    methods: {
+      rub: rub,
+      load: function () {
+        var self = this;
+        self.loading = true;
+        call('getToday').then(function (data) {
+          self.data = data;
+          self.error = '';
+          self.loading = false;
+        }, function (err) {
+          self.error = err.error;
+          self.loading = false;
+        });
+      },
+      open: function (d) { go('deal/' + d.id); },
+      /** Убирает сделку из блоков и кладёт заново по тем же правилам, что getToday. */
+      place: function (d) {
+        var self = this;
+        ['overdue', 'today', 'fresh'].forEach(function (k) {
+          self.data[k] = self.data[k].filter(function (x) { return x.id !== d.id; });
+        });
+        var open = ['Новое', 'В диалоге', 'Курс подобран', 'Заказ создан', 'Отложено'].indexOf(d.stage) >= 0;
+        if (!open) return;
+        var t0 = dayStart(nowMs(), 0);
+        var t = d.taskAt ? new Date(d.taskAt).getTime() : null;
+        var key = null;
+        if (d.stage === 'Новое' && !d.answered) key = 'fresh';
+        else if (t === null || t < t0) key = 'overdue';
+        else if (t < t0 + DAY) key = 'today';
+        if (!key) return;
+        var list = this.data[key].concat([d]);
+        list.sort(function (a, b) { return (a.taskAt || '').localeCompare(b.taskAt || ''); });
+        this.data[key] = list;
+      },
+      merge: function (old, fresh) {
+        var d = Object.assign({}, old, fresh);
+        d._busy = false;
+        return d;
+      },
+      wrote: function (d) {
+        var self = this;
+        d._busy = true;
+        save(call('addTouch', d.id, { type: 'Написал', text: '' })).then(function (res) {
+          var nd = self.merge(d, res.deal);
+          nd.answered = true;
+          nd.lastTouchAt = res.touch.date;
+          self.data.counters.touches += res.newTouches.filter(function (t) { return t.type !== 'Смена стадии'; }).length;
+          self.place(nd);
+          toast('Касание добавлено, задача: ' + fmtWhen(nd.taskAt));
+        }, function () { d._busy = false; });
+      },
+      plusDay: function (d) {
+        var self = this;
+        d._busy = true;
+        var taskAt = dayAt(1, hhmmOf(d.taskAt, store.boot.settings.TASK_DEFAULT_TIME));
+        save(call('updateDeal', d.id, { taskAt: taskAt })).then(function (res) {
+          self.place(self.merge(d, res.deal));
+          toast('Задача перенесена на ' + fmtWhen(taskAt));
+        }, function () { d._busy = false; });
+      }
+    }
+  };
+
+  /* ---------- Окно смены стадии с обязательными полями ---------- */
+  var StageModal = {
+    props: ['deal', 'stage'],
+    emits: ['cancel', 'done'],
+    data: function () {
+      var s = store.boot.settings;
+      return {
+        f: {
+          amount: this.deal.amount || '',
+          payMethod: this.deal.payMethod || '',
+          paidAt: toInputDate(new Date().toISOString()),
+          orderNo: this.deal.orderNo || '',
+          lostReason: this.deal.lostReason || '',
+          nextTask: this.stage === 'Отложено' ? 'Вернуться к клиенту' : (this.deal.nextTask || 'Связаться с клиентом'),
+          taskAt: this.stage === 'Отложено' ? toInputDT(dayAt(7, s.TASK_DEFAULT_TIME)) : toInputDT(this.deal.taskAt || dayAt(0, s.TASK_DEFAULT_TIME))
+        },
+        busy: false,
+        errField: ''
+      };
+    },
+    template:
+      '<div class="overlay" @click.self="$emit(\'cancel\')" @keydown.esc="$emit(\'cancel\')">' +
+      '  <div class="modal sm">' +
+      '    <div class="modal-head"><h2>{{ stage }}</h2><button class="btn ghost sm" style="margin-left:auto" @click="$emit(\'cancel\')">✕</button></div>' +
+      '    <div class="modal-body">' +
+      '      <template v-if="stage === \'Оплачено\'">' +
+      '        <div class="field"><label>Сумма, ₽</label><input class="input" :class="{\'has-error\': errField===\'amount\'}" type="number" min="0" step="100" v-model="f.amount" ref="first"></div>' +
+      '        <div class="field"><label>Способ оплаты</label><select class="select" :class="{\'has-error\': errField===\'payMethod\'}" v-model="f.payMethod"><option value="">— выберите —</option><option v-for="p in dicts.payMethods" :key="p">{{ p }}</option></select></div>' +
+      '        <div class="field"><label>Дата оплаты</label><input class="input" type="date" v-model="f.paidAt"></div>' +
+      '        <div class="field"><label>Номер заказа GetCourse</label><input class="input" v-model="f.orderNo"></div>' +
+      '      </template>' +
+      '      <template v-else-if="stage === \'Отказ\'">' +
+      '        <div class="field"><label>Причина отказа</label><select class="select" :class="{\'has-error\': errField===\'lostReason\'}" v-model="f.lostReason" ref="first"><option value="">— выберите —</option><option v-for="p in dicts.lostReasons" :key="p">{{ p }}</option></select></div>' +
+      '      </template>' +
+      '      <template v-else>' +
+      '        <div class="field"><label>Следующая задача</label><input class="input" v-model="f.nextTask" ref="first"></div>' +
+      '        <div class="field"><label>{{ stage === \'Отложено\' ? \'Когда вернуться (не раньше завтра)\' : \'Дата задачи\' }}</label><input class="input" :class="{\'has-error\': errField===\'taskAt\'}" type="datetime-local" v-model="f.taskAt"></div>' +
+      '      </template>' +
+      '    </div>' +
+      '    <div class="modal-foot"><button class="btn" @click="$emit(\'cancel\')">Отмена</button>' +
+      '      <button class="btn primary" :disabled="busy" @click="submit">Сохранить</button></div>' +
+      '  </div>' +
+      '</div>',
+    computed: { dicts: function () { return store.boot.dicts; } },
+    mounted: function () { var r = this.$refs.first; if (r) r.focus(); },
+    methods: {
+      submit: function () {
+        var self = this;
+        var p = { stage: this.stage };
+        if (this.stage === 'Оплачено') {
+          p.amount = this.f.amount === '' ? '' : Number(this.f.amount);
+          p.payMethod = this.f.payMethod;
+          p.paidAt = this.f.paidAt;
+          p.orderNo = this.f.orderNo;
+        } else if (this.stage === 'Отказ') {
+          p.lostReason = this.f.lostReason;
+        } else {
+          p.nextTask = this.f.nextTask;
+          p.taskAt = fromInputDT(this.f.taskAt);
+        }
+        this.busy = true;
+        save(call('updateDeal', this.deal.id, p)).then(function (res) {
+          self.busy = false;
+          self.$emit('done', res);
+        }, function (err) {
+          self.busy = false;
+          self.errField = err.field || '';
+        });
+      }
+    }
+  };
+
+  /* ---------- Панель шаблонов ---------- */
+  var TemplatesPanel = {
+    props: ['deal', 'client'],
+    emits: ['used', 'close'],
+    data: function () { return { q: '', selected: null, busy: false }; },
+    template:
+      '<div class="tpl-panel">' +
+      '  <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)">' +
+      '    <input class="input grow" v-model="q" placeholder="Поиск по шаблонам">' +
+      '    <button class="btn ghost sm" @click="$emit(\'close\')">Закрыть</button></div>' +
+      '  <div class="tpl-cols">' +
+      '    <div class="tpl-list">' +
+      '      <template v-for="g in groups" :key="g.name">' +
+      '        <div class="tpl-group">{{ g.name }}</div>' +
+      '        <button v-for="t in g.items" :key="t.id" class="tpl-item" :class="{on: selected && selected.id === t.id}" @click="selected = t">{{ t.title }}</button>' +
+      '      </template>' +
+      '      <div v-if="!groups.length" class="empty">Ничего не найдено</div>' +
+      '    </div>' +
+      '    <div class="tpl-preview">' +
+      '      <div v-if="!selected" class="muted">Выберите шаблон слева.</div>' +
+      '      <template v-else>' +
+      '        <div class="row"><b class="grow">{{ selected.title }}</b><span class="faint">{{ selected.situation }}</span></div>' +
+      '        <div class="tpl-text" v-html="filled.html"></div>' +
+      '        <div v-if="missing.length" class="hint warn">Не заполнено: {{ missing.join(", ") }} — эти места останутся пустыми.</div>' +
+      '        <div class="row" style="margin-top:8px"><button class="btn primary" :disabled="busy" @click="copy">Скопировать</button></div>' +
+      '      </template>' +
+      '    </div>' +
+      '  </div>' +
+      '</div>',
+    computed: {
+      vars: function () {
+        var d = this.deal || {};
+        return {
+          'Имя': this.client ? this.client.name : '',
+          'Курс': d.course || '',
+          'Тариф': d.tariff || '',
+          'Сумма': Number(d.amount) > 0 ? rub(d.amount) : '',
+          'Менеджер': store.boot.user.name
+        };
+      },
+      groups: function () {
+        var q = this.q.trim().toLowerCase();
+        var map = {};
+        var order = [];
+        store.boot.templates.forEach(function (t) {
+          if (q && (t.title + ' ' + t.situation + ' ' + t.text).toLowerCase().indexOf(q) < 0) return;
+          if (!map[t.situation]) { map[t.situation] = []; order.push(t.situation); }
+          map[t.situation].push(t);
+        });
+        return order.map(function (n) { return { name: n || 'Без ситуации', items: map[n] }; });
+      },
+      filled: function () { return fillTemplate(this.selected ? this.selected.text : '', this.vars); },
+      missing: function () {
+        var self = this;
+        var names = [];
+        String(this.selected ? this.selected.text : '').replace(/\{(Имя|Курс|Тариф|Сумма|Менеджер)\}/g, function (_, n) {
+          if (!self.vars[n] && names.indexOf(n) < 0) names.push(n);
+        });
+        return names;
+      }
+    },
+    methods: {
+      copy: function () {
+        var self = this;
+        var tpl = this.selected;
+        copyText(this.filled.text).then(function () {
+          toast('Скопировано');
+          self.busy = true;
+          save(call('logTemplateUse', self.deal.id, tpl.id)).then(function (res) {
+            self.busy = false;
+            self.$emit('used', res);
+          }, function () { self.busy = false; });
+        }, function () {
+          toast('Браузер не дал скопировать. Выделите текст и нажмите Ctrl+C.', true);
+        });
+      }
+    }
+  };
+
+  /* ---------- Карточка сделки ---------- */
+  var DealView = {
+    components: { InlineField: InlineField, StageModal: StageModal, TemplatesPanel: TemplatesPanel },
+    props: ['id'],
+    data: function () {
+      return {
+        loading: true, error: '', deal: null, client: null, touches: [], otherDeals: [],
+        errField: '', clientErr: '', stageTarget: '', showTpl: false,
+        touch: { type: 'Написал', text: '' }, touchBusy: false,
+        edit: {}
+      };
+    },
+    template:
+      '<div>' +
+      '  <div v-if="loading && !deal" class="loading">Загружаю карточку…</div>' +
+      '  <div v-else-if="error" class="panel">{{ error }} <a href="#" @click.prevent="back">Вернуться</a></div>' +
+      '  <template v-else-if="deal">' +
+      '    <div class="deal-head">' +
+      '      <button class="btn ghost sm" @click="back">← Сегодня</button>' +
+      '      <h1>{{ client ? client.name : "Клиент не найден" }}</h1>' +
+      '      <span class="stage" :class="stageClass(deal.stage)">{{ deal.stage }}</span>' +
+      '      <span class="chip" :class="\'ch-\' + deal.channel">{{ deal.channel }}</span>' +
+      '      <span class="faint">{{ deal.id }} · {{ deal.potok }} · создана {{ fmtDate(deal.createdAt) }}</span>' +
+      '      <a v-if="link" class="btn sm primary" style="margin-left:auto" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
+      '    </div>' +
+      '    <div v-if="client && client.check" class="banner"><b>Клиент:</b><span class="grow">{{ client.check }}</span><button class="btn sm" @click="checked(\'client\')">Проверено</button></div>' +
+      '    <div v-if="deal.check" class="banner"><b>Сделка:</b><span class="grow">{{ deal.check }}</span><button class="btn sm" @click="checked(\'deal\')">Проверено</button></div>' +
+      '    <div class="deal-grid">' +
+
+      /* ---- Клиент ---- */
+      '      <div class="panel zone-client" v-if="client">' +
+      '        <h2>Клиент <span class="faint" style="font-weight:400">{{ client.id }}</span></h2>' +
+      '        <div class="kv" v-for="f in clientFields" :key="f.key"><div class="label">{{ f.label }}</div>' +
+      '          <inline-field :value="client[f.key]" :error="clientErr === f.key" :type="f.type" @save="v => saveClient(f.key, v)"></inline-field>' +
+      '          <div class="inline-links" v-if="f.key === \'nick\' && client.nick"><a :href="\'https://instagram.com/\' + client.nick" target="_blank" rel="noopener">instagram.com/{{ client.nick }} ↗</a></div>' +
+      '          <div class="inline-links" v-if="f.key === \'dialogUrl\' && client.dialogUrl"><a :href="client.dialogUrl" target="_blank" rel="noopener">открыть ↗</a></div>' +
+      '          <div class="inline-links" v-if="f.key === \'gcId\' && client.gcId && settings.GC_USER_URL"><a :href="fill(settings.GC_USER_URL, {id: client.gcId})" target="_blank" rel="noopener">профиль в GetCourse ↗</a></div>' +
+      '          <div class="inline-links" v-if="f.key === \'email\' && client.email"><a :href="\'mailto:\' + client.email">написать ↗</a></div>' +
+      '        </div>' +
+      '        <div v-if="otherDeals.length" style="margin-top:12px"><div class="label">Другие сделки клиента</div>' +
+      '          <div class="other-deal" v-for="o in otherDeals" :key="o.id"><a href="#" @click.prevent="openDeal(o.id)">{{ o.id }}</a>' +
+      '            <span class="stage" :class="stageClass(o.stage)">{{ o.stage }}</span><span class="muted grow">{{ o.course }}</span><span class="faint">{{ fmtDate(o.createdAt, false) }}</span></div>' +
+      '        </div>' +
+      '      </div>' +
+
+      /* ---- История ---- */
+      '      <div class="panel zone-history">' +
+      '        <div class="row" style="margin-bottom:10px"><h2 class="grow" style="margin:0">История</h2>' +
+      '          <button class="btn sm" :class="{on: showTpl}" @click="showTpl = !showTpl">Шаблоны</button></div>' +
+      '        <templates-panel v-if="showTpl" :deal="deal" :client="client" @used="onTemplateUsed" @close="showTpl = false"></templates-panel>' +
+      '        <div class="touch-form">' +
+      '          <div class="seg" style="margin-bottom:8px"><button v-for="t in touchTypes" :key="t" class="btn sm" :class="{on: touch.type === t}" @click="touch.type = t">{{ t }}</button></div>' +
+      '          <textarea class="textarea" v-model="touch.text" :placeholder="touch.type === \'Заметка менеджера\' ? \'Текст заметки\' : \'Комментарий (необязательно)\'" @keydown.ctrl.enter.prevent="addTouch" @keydown.meta.enter.prevent="addTouch"></textarea>' +
+      '          <div class="row" style="margin-top:8px"><span class="hint grow">Ctrl+Enter — добавить</span><button class="btn primary" :disabled="touchBusy" @click="addTouch">Добавить</button></div>' +
+      '        </div>' +
+      '        <div v-if="!touches.length" class="muted">Касаний пока нет.</div>' +
+      '        <div v-for="(t, i) in touches" :key="i" class="feed-item" :class="{system: t.type === \'Смена стадии\'}">' +
+      '          <div class="feed-meta"><b>{{ t.type }}</b><span>{{ fmtDate(t.date) }}</span><span v-if="t.authorName">{{ t.authorName }}</span></div>' +
+      '          <div class="pre" v-if="t.text">{{ t.text }}</div>' +
+      '        </div>' +
+      '      </div>' +
+
+      /* ---- Сделка ---- */
+      '      <div class="panel zone-deal">' +
+      '        <h2>Сделка</h2>' +
+      '        <div class="field"><label>Стадия</label><select class="select" :value="deal.stage" @change="onStage($event)">' +
+      '          <option v-for="s in dicts.stages" :key="s" :value="s">{{ s }}</option></select></div>' +
+      '        <div class="row" style="align-items:flex-start">' +
+      '          <div class="field grow"><label>Поток</label><select class="select" :class="err(\'potok\')" :value="deal.potok" @change="saveDeal(\'potok\', $event.target.value)"><option v-for="s in dicts.potoki" :key="s">{{ s }}</option></select></div>' +
+      '          <div class="field grow"><label>Канал</label><select class="select" :class="err(\'channel\')" :value="deal.channel" @change="saveDeal(\'channel\', $event.target.value)"><option v-for="s in dicts.channels" :key="s">{{ s }}</option></select></div>' +
+      '        </div>' +
+      '        <div class="field"><label>Запрос клиента</label><textarea class="textarea" :class="err(\'request\')" v-model="edit.request" @blur="saveIfChanged(\'request\')"></textarea></div>' +
+      '        <div class="field"><label>Курс</label><input class="input" :class="err(\'course\')" list="dl-courses" v-model="edit.course" @change="saveIfChanged(\'course\')" placeholder="ЯБ, УСН, УСН + ОСН…"></div>' +
+      '        <div class="field"><label>Тариф</label><input class="input" :class="err(\'tariff\')" list="dl-tariffs" v-model="edit.tariff" @change="saveIfChanged(\'tariff\')">' +
+      '          <div class="hint" v-if="tariffHint">{{ tariffHint }}</div></div>' +
+      '        <datalist id="dl-courses"><option v-for="c in courses" :key="c" :value="c"></option></datalist>' +
+      '        <datalist id="dl-tariffs"><option v-for="t in tariffsForCourse" :key="t.tariff" :value="t.tariff">{{ rub(t.price) }}</option></datalist>' +
+      '        <div class="row" style="align-items:flex-start">' +
+      '          <div class="field grow"><label>Сумма, ₽</label><input class="input" :class="err(\'amount\')" type="number" min="0" step="100" v-model="edit.amount" @change="saveIfChanged(\'amount\')"></div>' +
+      '          <div class="field grow"><label>Способ оплаты</label><select class="select" :class="err(\'payMethod\')" :value="deal.payMethod" @change="saveDeal(\'payMethod\', $event.target.value)"><option value="">—</option><option v-for="s in dicts.payMethods" :key="s">{{ s }}</option></select></div>' +
+      '        </div>' +
+      '        <div class="field"><label>Номер заказа GetCourse</label><input class="input" :class="err(\'orderNo\')" v-model="edit.orderNo" @change="saveIfChanged(\'orderNo\')">' +
+      '          <div class="inline-links" v-if="deal.orderNo && settings.GC_ORDER_URL"><a :href="fill(settings.GC_ORDER_URL, {id: deal.orderNo})" target="_blank" rel="noopener">заказ в GetCourse ↗</a></div></div>' +
+      '        <div class="field" v-if="deal.stage === \'Оплачено\'"><label>Дата оплаты</label><input class="input" :class="err(\'paidAt\')" type="date" :value="toInputDate(deal.paidAt)" @change="saveDeal(\'paidAt\', $event.target.value)"></div>' +
+      '        <div class="field" v-if="deal.stage === \'Отказ\'"><label>Причина отказа</label><select class="select" :class="err(\'lostReason\')" :value="deal.lostReason" @change="saveDeal(\'lostReason\', $event.target.value)"><option v-for="s in dicts.lostReasons" :key="s">{{ s }}</option></select></div>' +
+      '        <template v-if="isOpen">' +
+      '          <div class="field"><label>Следующая задача</label><input class="input" :class="err(\'nextTask\')" v-model="edit.nextTask" @change="saveIfChanged(\'nextTask\')"></div>' +
+      '          <div class="field"><label>Дата задачи</label><input class="input" :class="err(\'taskAt\')" type="datetime-local" :value="toInputDT(deal.taskAt)" @change="saveDeal(\'taskAt\', fromInputDT($event.target.value))">' +
+      '            <div class="quick-dates"><button class="btn sm" v-for="q in quick" :key="q.n" @click="quickDate(q.n)">{{ q.label }}</button></div>' +
+      '            <div class="hint warn" v-if="taskInPast">Дата задачи уже прошла.</div></div>' +
+      '        </template>' +
+      '        <div class="big-actions">' +
+      '          <button class="btn ok lg" @click="stageTarget = \'Оплачено\'" :disabled="deal.stage === \'Оплачено\'">Оплачено</button>' +
+      '          <button class="btn danger lg" @click="stageTarget = \'Отказ\'" :disabled="deal.stage === \'Отказ\'">Отказ</button>' +
+      '        </div>' +
+      '      </div>' +
+      '    </div>' +
+      '    <stage-modal v-if="stageTarget" :deal="deal" :stage="stageTarget" @cancel="stageTarget = \'\'" @done="onStageDone"></stage-modal>' +
+      '  </template>' +
+      '</div>',
+    computed: {
+      dicts: function () { return store.boot.dicts; },
+      settings: function () { return store.boot.settings; },
+      link: function () { return this.deal && this.client ? dialogLink({ channel: this.deal.channel, nick: this.client.nick, dialogUrl: this.client.dialogUrl }) : ''; },
+      isOpen: function () { return ['Новое', 'В диалоге', 'Курс подобран', 'Заказ создан', 'Отложено'].indexOf(this.deal.stage) >= 0; },
+      taskInPast: function () { return this.deal.taskAt && new Date(this.deal.taskAt).getTime() < Date.now() - 60000; },
+      touchTypes: function () {
+        return store.boot.dicts.touchTypes.filter(function (t) { return t !== 'Обращение' && t !== 'Смена стадии' && t !== 'Шаблон'; });
+      },
+      clientFields: function () {
+        return [
+          { key: 'name', label: 'Имя' },
+          { key: 'nick', label: 'Ник Инстаграм' },
+          { key: 'dialogUrl', label: 'Ссылка на диалог' },
+          { key: 'gcId', label: 'ID GetCourse' },
+          { key: 'email', label: 'Почта', type: 'email' },
+          { key: 'phone', label: 'Телефон', type: 'tel' }
+        ];
+      },
+      courses: function () {
+        var seen = {};
+        return store.boot.tariffs.map(function (t) { return t.course; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
+      },
+      tariffsForCourse: function () {
+        var c = String(this.edit.course || '').trim();
+        return store.boot.tariffs.filter(function (t) { return t.course === c; });
+      },
+      tariffHint: function () {
+        var c = String(this.edit.course || '').trim();
+        if (!c) return '';
+        if (/\+|комбо/i.test(c)) return 'Комбо — сумму введите вручную.';
+        if (!this.tariffsForCourse.length) return 'Для этого курса нет тарифов в справочнике — сумму введите вручную.';
+        return '';
+      },
+      quick: function () { return [{ n: 0, label: 'Сегодня' }, { n: 1, label: '+1 день' }, { n: 2, label: '+2 дня' }, { n: 7, label: '+1 неделя' }]; }
+    },
+    watch: { id: { immediate: true, handler: function () { this.load(); } } },
+    methods: {
+      fmtDate: fmtDate, stageClass: stageClass, rub: rub, fill: fill,
+      toInputDT: toInputDT, toInputDate: toInputDate, fromInputDT: fromInputDT,
+      err: function (f) { return { 'has-error': this.errField === f }; },
+      // Страница живёт в iframe Google, история браузера там ненадёжна — возвращаемся на «Сегодня».
+      back: function () { go('today'); },
+      openDeal: function (id) { go('deal/' + id); },
+      load: function () {
+        var self = this;
+        self.loading = true;
+        self.showTpl = false;
+        call('getDeal', this.id).then(function (data) {
+          self.deal = data.deal;
+          self.client = data.client;
+          self.touches = data.touches;
+          self.otherDeals = data.otherDeals;
+          self.resetEdit();
+          self.error = '';
+          self.loading = false;
+          document.title = (data.client ? data.client.name + ' — ' : '') + 'CRM';
+        }, function (err) {
+          self.error = err.error;
+          self.loading = false;
+        });
+      },
+      resetEdit: function () {
+        var d = this.deal;
+        this.edit = { request: d.request, course: d.course, tariff: d.tariff, amount: d.amount, orderNo: d.orderNo, nextTask: d.nextTask };
+      },
+      applyResult: function (res) {
+        this.deal = Object.assign({}, this.deal, res.deal);
+        if (res.newTouches && res.newTouches.length) this.touches = res.newTouches.slice().reverse().concat(this.touches);
+        this.resetEdit();
+        this.errField = '';
+        store.todayVersion++;
+      },
+      saveDeal: function (field, value) {
+        var self = this;
+        var patch = {};
+        patch[field] = field === 'amount' ? (value === '' ? '' : Number(value)) : value;
+        return save(call('updateDeal', this.deal.id, patch)).then(function (res) {
+          self.applyResult(res);
+        }, function (err) {
+          self.errField = err.field || field;
+          self.resetEdit();
+        });
+      },
+      saveIfChanged: function (field) {
+        var v = this.edit[field];
+        var cur = this.deal[field];
+        if (String(v === null || v === undefined ? '' : v).trim() === String(cur === null || cur === undefined ? '' : cur).trim()) return;
+        this.saveDeal(field, v);
+      },
+      quickDate: function (n) {
+        this.saveDeal('taskAt', dayAt(n, hhmmOf(this.deal.taskAt, this.settings.TASK_DEFAULT_TIME)));
+      },
+      onStage: function (e) {
+        var target = e.target.value;
+        e.target.value = this.deal.stage;
+        if (target === this.deal.stage) return;
+        var needsModal = target === 'Оплачено' || target === 'Отказ' || target === 'Отложено' ||
+          (['Новое', 'В диалоге', 'Курс подобран', 'Заказ создан'].indexOf(target) >= 0 && !this.deal.taskAt);
+        if (needsModal) this.stageTarget = target;
+        else this.saveDeal('stage', target);
+      },
+      onStageDone: function (res) {
+        this.stageTarget = '';
+        this.applyResult(res);
+        toast('Стадия: ' + res.deal.stage);
+      },
+      saveClient: function (field, value) {
+        var self = this;
+        var patch = {};
+        patch[field] = value;
+        save(call('updateClient', this.client.id, patch)).then(function (c) {
+          self.client = c;
+          self.clientErr = '';
+          store.todayVersion++;
+        }, function (err) {
+          self.clientErr = err.field || field;
+        });
+      },
+      checked: function (kind) {
+        var self = this;
+        var id = kind === 'client' ? this.client.id : this.deal.id;
+        save(call('markChecked', kind, id)).then(function () {
+          if (kind === 'client') self.client = Object.assign({}, self.client, { check: '' });
+          else self.deal = Object.assign({}, self.deal, { check: '' });
+          store.todayVersion++;
+        });
+      },
+      addTouch: function () {
+        var self = this;
+        if (this.touchBusy) return;
+        this.touchBusy = true;
+        save(call('addTouch', this.deal.id, { type: this.touch.type, text: this.touch.text })).then(function (res) {
+          self.touchBusy = false;
+          self.touch.text = '';
+          self.applyResult(res);
+          toast('Касание добавлено');
+        }, function () { self.touchBusy = false; });
+      },
+      onTemplateUsed: function (res) { this.applyResult(res); }
+    }
+  };
+
+  /* ---------- Новое обращение ---------- */
+  var NewLeadModal = {
+    emits: ['close'],
+    data: function () {
+      return {
+        f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '' },
+        showCourse: false, dups: null, chosen: null, force: false, checking: false, busy: false, errField: '', lastChecked: ''
+      };
+    },
+    template:
+      '<div class="overlay" @keydown.esc="$emit(\'close\')">' +
+      '  <div class="modal" @keydown.enter="onEnter">' +
+      '    <div class="modal-head"><h2>Новое обращение</h2><button class="btn ghost sm" style="margin-left:auto" @click="$emit(\'close\')">✕</button></div>' +
+      '    <div class="modal-body">' +
+      '      <div class="field"><label>Канал</label><div class="seg" :class="{\'has-error\': errField===\'channel\'}" style="border-radius:6px">' +
+      '        <button v-for="c in dicts.channels" :key="c" type="button" class="btn sm" :class="{on: f.channel === c}" @click="f.channel = c">{{ c }}</button></div></div>' +
+      '      <div class="field"><label>Поток</label><div class="seg">' +
+      '        <button v-for="p in dicts.potoki" :key="p" type="button" class="btn sm" :class="{on: f.potok === p}" @click="f.potok = p">{{ p }}</button></div></div>' +
+      '      <div v-if="chosen" class="chosen"><div class="row"><span class="grow">Клиент: <b>{{ chosen.name }}</b> <span class="faint">{{ chosen.id }}</span></span>' +
+      '        <button class="btn ghost sm" @click="chosen = null">Другой</button></div></div>' +
+      '      <template v-else>' +
+      '        <div class="field"><label>Контакт — ник, ссылка, почта, телефон или ID GetCourse</label>' +
+      '          <input class="input" :class="{\'has-error\': errField===\'contact\' || [\'nick\',\'email\',\'phone\',\'dialogUrl\',\'gcId\'].indexOf(errField) >= 0}" v-model="f.contact" ref="contact" @blur="checkDups" placeholder="@nick, https://vk.com/…, 89161234567">' +
+      '          <div class="hint" v-if="kind">Распознано: {{ kindName }}<span v-if="checking"> · проверяю базу…</span></div></div>' +
+      '        <div v-if="dups && dups.length && !force" class="dup-box">' +
+      '          <b>Похоже, клиент уже есть в базе</b>' +
+      '          <div v-for="c in dups" :key="c.id" class="dup-card">' +
+      '            <div class="row wrap"><b>{{ c.name }}</b><span class="faint">{{ c.id }}</span><span class="muted">совпало: {{ c.matchedBy.join(", ") }}</span></div>' +
+      '            <div class="muted" style="font-size:13px" v-if="c.deals.length">Сделки: <span v-for="(d, i) in c.deals" :key="d.id">{{ i ? ", " : "" }}{{ d.id }} — {{ d.stage }}{{ d.course ? " (" + d.course + ")" : "" }}</span></div>' +
+      '            <button class="btn sm primary" style="margin-top:6px" @click="choose(c)">Это он — создать сделку для этого клиента</button>' +
+      '          </div>' +
+      '          <button class="btn sm" @click="force = true">Это другой человек</button>' +
+      '        </div>' +
+      '        <div class="field"><label>Имя</label><input class="input" :class="{\'has-error\': errField===\'name\'}" v-model="f.name"></div>' +
+      '      </template>' +
+      '      <div class="field"><label>Запрос клиента</label><textarea class="textarea" :class="{\'has-error\': errField===\'request\'}" v-model="f.request" placeholder="Что спрашивает клиент. Enter — сохранить, Shift+Enter — новая строка"></textarea></div>' +
+      '      <a href="#" v-if="!showCourse" @click.prevent="showCourse = true">+ курс и тариф</a>' +
+      '      <div class="row" v-if="showCourse" style="align-items:flex-start">' +
+      '        <div class="field grow"><label>Курс</label><input class="input" list="dl-new-courses" v-model="f.course"></div>' +
+      '        <div class="field grow"><label>Тариф</label><input class="input" list="dl-new-tariffs" v-model="f.tariff"></div>' +
+      '        <datalist id="dl-new-courses"><option v-for="c in courses" :key="c" :value="c"></option></datalist>' +
+      '        <datalist id="dl-new-tariffs"><option v-for="t in tariffsForCourse" :key="t.tariff" :value="t.tariff"></option></datalist>' +
+      '      </div>' +
+      '    </div>' +
+      '    <div class="modal-foot"><button class="btn" @click="$emit(\'close\')">Отмена</button>' +
+      '      <button class="btn primary" :disabled="busy" @click="submit">{{ busy ? "Сохраняю…" : "Сохранить" }}</button></div>' +
+      '  </div>' +
+      '</div>',
+    computed: {
+      dicts: function () { return store.boot.dicts; },
+      kind: function () { return detectContact(this.f.contact); },
+      kindName: function () { return CONTACT_NAMES[this.kind] || ''; },
+      courses: function () {
+        var seen = {};
+        return store.boot.tariffs.map(function (t) { return t.course; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
+      },
+      tariffsForCourse: function () {
+        var c = this.f.course.trim();
+        return store.boot.tariffs.filter(function (t) { return t.course === c; });
+      }
+    },
+    watch: { 'f.contact': function () { this.force = false; } },
+    mounted: function () { var self = this; nextTick(function () { if (self.$refs.contact) self.$refs.contact.focus(); }); },
+    methods: {
+      checkDups: function () {
+        var self = this;
+        var c = this.f.contact.trim();
+        if (!c || c === this.lastChecked) return Promise.resolve();
+        this.lastChecked = c;
+        this.checking = true;
+        return call('findDuplicates', { contact: c }).then(function (list) {
+          self.checking = false;
+          self.dups = list;
+        }, function () { self.checking = false; });
+      },
+      choose: function (c) {
+        this.chosen = c;
+        this.dups = null;
+      },
+      onEnter: function (e) {
+        if (e.shiftKey || e.isComposing) return;
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+        e.preventDefault();
+        this.submit();
+      },
+      submit: function () {
+        var self = this;
+        if (this.busy) return;
+        this.errField = '';
+        if (!this.f.channel) { this.errField = 'channel'; toast('Выберите канал', true); return; }
+        var payload = {
+          deal: { channel: this.f.channel, potok: this.f.potok, request: this.f.request, course: this.f.course, tariff: this.f.tariff },
+          force: this.force
+        };
+        if (this.chosen) payload.clientId = this.chosen.id;
+        else payload.client = { name: this.f.name, contact: this.f.contact };
+        this.busy = true;
+        save(call('createDeal', payload)).then(function (res) {
+          self.busy = false;
+          if (res.duplicates) {
+            self.dups = res.duplicates;
+            toast('Похоже, клиент уже есть — выберите вариант', true);
+            return;
+          }
+          toast('Обращение ' + res.dealId + ' создано');
+          store.todayVersion++;
+          self.$emit('close');
+          go('deal/' + res.dealId);
+        }, function (err) {
+          self.busy = false;
+          self.errField = err.field || '';
+        });
+      }
+    }
+  };
+
+  /* ---------- Поиск в верхней панели ---------- */
+  var SearchBox = {
+    data: function () { return { q: '', results: [], open: false, hl: 0, loading: false, seq: 0 }; },
+    template:
+      '<div class="search">' +
+      '  <input class="input" ref="inp" v-model="q" placeholder="Поиск: имя, ник, почта, телефон, ID  ( / )" @focus="open = true" @blur="close" @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter.prevent="pick(results[hl])" @keydown.esc="q = \'\'; $event.target.blur()">' +
+      '  <div class="search-results" v-if="open && q.trim().length >= 2">' +
+      '    <div v-if="loading && !results.length" class="empty">Ищу…</div>' +
+      '    <div v-else-if="!results.length" class="empty">Ничего не найдено</div>' +
+      '    <a v-for="(d, i) in results" :key="d.id" class="search-item" :class="{hl: i === hl}" @mousedown.prevent="pick(d)">' +
+      '      <div class="row"><b class="grow">{{ d.clientName }}</b><span class="stage" :class="stageClass(d.stage)">{{ d.stage }}</span></div>' +
+      '      <div class="muted" style="font-size:12px">{{ d.id }} · {{ d.channel }}{{ d.course ? " · " + d.course : "" }}{{ d.nick ? " · @" + d.nick : "" }}</div>' +
+      '    </a>' +
+      '  </div>' +
+      '</div>',
+    watch: {
+      q: function (v) {
+        var self = this;
+        clearTimeout(this._t);
+        if (v.trim().length < 2) { this.results = []; return; }
+        this._t = setTimeout(function () {
+          var my = ++self.seq;
+          self.loading = true;
+          call('listDeals', { query: v.trim(), limit: 20 }).then(function (list) {
+            if (my !== self.seq) return;
+            self.loading = false;
+            self.results = list;
+            self.hl = 0;
+          }, function () { self.loading = false; });
+        }, 300);
+      }
+    },
+    methods: {
+      stageClass: stageClass,
+      focus: function () { this.$refs.inp.focus(); },
+      close: function () { var self = this; setTimeout(function () { self.open = false; }, 150); },
+      move: function (n) { if (this.results.length) this.hl = (this.hl + n + this.results.length) % this.results.length; },
+      pick: function (d) {
+        if (!d) return;
+        this.q = '';
+        this.results = [];
+        this.$refs.inp.blur();
+        go('deal/' + d.id);
+      }
+    }
+  };
+
+  /* ---------- Корень ---------- */
+  var Root = {
+    components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox },
+    template:
+      '<div v-if="!store.boot" class="loading">{{ store.bootError || "Загрузка…" }}</div>' +
+      '<template v-else>' +
+      '  <header class="topbar"><div class="topbar-in">' +
+      '    <span class="brand">Учёт в народ · CRM</span>' +
+      '    <nav class="tabs"><a v-for="t in tabs" :key="t.hash" class="tab" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)">{{ t.title }}</a></nav>' +
+      '    <search-box ref="search"></search-box>' +
+      '    <button class="btn primary" @click="store.newLeadOpen = true" title="Горячая клавиша N">+ Обращение</button>' +
+      '    <span class="save-state">{{ saveState }}</span>' +
+      '    <span class="who">{{ store.boot.user.name }}</span>' +
+      '  </div></header>' +
+      '  <main class="main">' +
+      '    <today-view v-if="store.route.name === \'today\'"></today-view>' +
+      '    <deal-view v-else-if="store.route.name === \'deal\'" :id="store.route.id"></deal-view>' +
+      '  </main>' +
+      '  <new-lead-modal v-if="store.newLeadOpen" @close="store.newLeadOpen = false"></new-lead-modal>' +
+      '</template>' +
+      '<div class="toasts"><div v-for="t in store.toasts" :key="t.id" class="toast" :class="{error: t.error}">{{ t.text }}</div></div>',
+    data: function () { return { store: store, tick: 0 }; },
+    computed: {
+      tabs: function () {
+        return [{ name: 'today', hash: 'today', title: 'Сегодня' }];
+      },
+      saveState: function () {
+        this.tick; // пересчёт по таймеру
+        if (store.saving) return 'Сохранение…';
+        if (store.savedAt && Date.now() - store.savedAt < 4000) return 'Сохранено ✓';
+        return '';
+      }
+    },
+    created: function () {
+      var self = this;
+      setInterval(function () { self.tick++; }, 1000);
+      document.addEventListener('keydown', function (e) {
+        var tag = (e.target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if ((e.key === 'n' || e.key === 'N' || e.key === 'т' || e.key === 'Т') && !store.newLeadOpen) {
+          e.preventDefault();
+          store.newLeadOpen = true;
+        } else if (e.key === '/' || e.key === '.') {
+          if (e.key === '.' && e.code !== 'Slash') return;
+          e.preventDefault();
+          if (self.$refs.search) self.$refs.search.focus();
+        }
+      });
+    },
+    methods: { go: go }
+  };
+
+  /* ================= Запуск ================= */
+
+  try {
+    google.script.history.setChangeHandler(function (e) { store.route = parseHash(e.location.hash); });
+    google.script.url.getLocation(function (loc) { store.route = parseHash(loc.hash); });
+  } catch (e) { /* локальный просмотр */ }
+
+  call('getBootstrap').then(function (data) {
+    store.boot = data;
+  }, function (err) {
+    store.bootError = err.error;
+  });
+
+  Vue.createApp(Root).mount('#app');
+})();
 </script>

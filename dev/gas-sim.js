@@ -10,8 +10,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
+// Date внутри vm-контекста — другой класс, чем снаружи (instanceof не сработает).
+// Поэтому даты из JSON создаются конструктором контекста: SimDate ставится в create().
+let SimDate = Date;
 function reviveCell(v) {
-  if (v && typeof v === 'object' && v.$date) return new Date(v.$date);
+  if (v && typeof v === 'object' && v.$date) return new SimDate(v.$date);
   return v === null || v === undefined ? '' : v;
 }
 
@@ -117,7 +120,7 @@ class Spreadsheet {
   /** Значения листа как простые массивы (для сравнения снимков). */
   dump(n) {
     const s = this.getSheetByName(n);
-    return s.grid.map((r) => r.map((v) => (v instanceof Date ? v.toISOString() : v)));
+    return s.grid.map((r) => r.map((v) => (v && typeof v.toISOString === 'function' ? v.toISOString() : v)));
   }
 }
 
@@ -136,6 +139,8 @@ function formatDate(d, tz, fmt) {
 }
 
 function create({ workbook, email = '', appUrl = 'https://script.google.com/macros/s/TEST/exec' }) {
+  const realm = vm.createContext({});
+  SimDate = vm.runInContext('Date', realm);
   const ss = new Spreadsheet(JSON.parse(JSON.stringify(workbook)));
   const cache = new Map();
   const props = new Map();
@@ -186,13 +191,13 @@ function create({ workbook, email = '', appUrl = 'https://script.google.com/macr
       })
     }
   };
-  vm.createContext(ctx);
+  Object.assign(realm, ctx);
   const srcDir = path.join(__dirname, '..', 'src');
   fs.readdirSync(srcDir)
     .filter((f) => f.endsWith('.gs'))
     .sort()
-    .forEach((f) => vm.runInContext(fs.readFileSync(path.join(srcDir, f), 'utf8'), ctx, { filename: f }));
-  return { ctx, ss, state, cache, props };
+    .forEach((f) => vm.runInContext(fs.readFileSync(path.join(srcDir, f), 'utf8'), realm, { filename: f }));
+  return { ctx: realm, ss, state, cache, props, Date: SimDate };
 }
 
 module.exports = { create };
