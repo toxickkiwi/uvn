@@ -1,7 +1,307 @@
 /**
  * Tests.gs — самопроверка бизнес-правил (ТЗ, раздел 8, этап 2).
+ *
+ * runSelfTests() создаёт временные листы с префиксом TEST_, гоняет на них правила
+ * и API, затем удаляет листы. Рабочие данные не читаются и не меняются.
  */
 
+var TEST_PREFIX = 'TEST_';
+var TEST_USER = { email: 'test.manager@example.com', name: 'Тест Менеджер', role: 'менеджер', active: true };
+var TEST_BOSS = { email: 'test.boss@example.com', name: 'Тест Руководитель', role: 'руководитель', active: true };
+/** Понедельник 05.10.2026, 12:00 по Москве. */
+var TEST_NOW = new Date('2026-10-05T09:00:00Z');
+
 function runSelfTests() {
-  notify_('Самопроверка появится на этапе 2 (правила и API).');
+  var results = [];
+  var ss = SpreadsheetApp.getActive();
+  removeTestSheets_(ss);
+  try {
+    createTestSheets_(ss);
+    TABLE_PREFIX_ = TEST_PREFIX;
+    REF_MEMO_ = null;
+    NOW_OVERRIDE_ = TEST_NOW;
+    selfTestCases_().forEach(function (tc) {
+      try {
+        tc[1]();
+        results.push({ name: tc[0], ok: true });
+      } catch (e) {
+        results.push({ name: tc[0], ok: false, error: e.userMessage || e.message || String(e) });
+      }
+    });
+  } finally {
+    TABLE_PREFIX_ = '';
+    REF_MEMO_ = null;
+    NOW_OVERRIDE_ = null;
+    removeTestSheets_(ss);
+  }
+
+  var failed = results.filter(function (r) { return !r.ok; });
+  var lines = results.map(function (r) { return (r.ok ? '✓ ' : '✗ ') + r.name + (r.ok ? '' : ' — ' + r.error); });
+  console.log(lines.join('\n'));
+  var msg = failed.length
+    ? 'Самопроверка: ошибок ' + failed.length + ' из ' + results.length + '.\n\n' +
+      failed.map(function (r) { return '✗ ' + r.name + ' — ' + r.error; }).join('\n')
+    : 'Самопроверка пройдена: ' + results.length + ' из ' + results.length + ' проверок.';
+  notify_(msg);
+  return { passed: results.length - failed.length, failed: failed.length, results: results };
+}
+
+function removeTestSheets_(ss) {
+  ss.getSheets().forEach(function (sh) {
+    if (sh.getName().indexOf(TEST_PREFIX) === 0) ss.deleteSheet(sh);
+  });
+}
+
+function createTestSheets_(ss) {
+  var put = function (name, rows) {
+    var sh = ss.insertSheet(TEST_PREFIX + name);
+    var width = rows[0].length;
+    sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
+      var line = r.slice();
+      while (line.length < width) line.push('');
+      return line;
+    }));
+  };
+  put(SHEET.CLIENTS, [values_(SCHEMA[SHEET.CLIENTS])]);
+  put(SHEET.DEALS, [values_(SCHEMA[SHEET.DEALS])]);
+  put(SHEET.TOUCHES, [values_(SCHEMA[SHEET.TOUCHES])]);
+
+  var dictHeaders = values_(SCHEMA[SHEET.DICTS]);
+  var maxLen = Math.max.apply(null, dictHeaders.map(function (h) { return DEFAULT_DICTS[h].length; }));
+  var dictRows = [dictHeaders];
+  for (var i = 0; i < maxLen; i++) dictRows.push(dictHeaders.map(function (h) { return DEFAULT_DICTS[h][i] || ''; }));
+  put(SHEET.DICTS, dictRows);
+
+  put(SHEET.TARIFFS, [values_(SCHEMA[SHEET.TARIFFS]),
+    ['ЯБ', 'Золотая середина', 89900, true],
+    ['УСН', 'Необходимый минимум', 29900, true],
+    ['УСН', 'Старый', 1000, false]]);
+  put(SHEET.TEMPLATES, [values_(SCHEMA[SHEET.TEMPLATES]),
+    ['T001', 'Оплата', 'Оплата поступила', '{Имя}, оплата {Сумма} за «{Курс}» поступила. {Менеджер}', true]]);
+  put(SHEET.USERS, [values_(SCHEMA[SHEET.USERS]),
+    [TEST_USER.email, TEST_USER.name, TEST_USER.role, '', true],
+    [TEST_BOSS.email, TEST_BOSS.name, TEST_BOSS.role, '', true]]);
+  var settings = [values_(SCHEMA[SHEET.SETTINGS])];
+  DEFAULT_SETTINGS.forEach(function (s) { settings.push([s.key, s.value]); });
+  put(SHEET.SETTINGS, settings);
+}
+
+/* ---------- Проверки ---------- */
+
+function assertEq_(actual, expected, what) {
+  var a = JSON.stringify(actual);
+  var e = JSON.stringify(expected);
+  if (a !== e) throw new Error((what ? what + ': ' : '') + 'ожидалось ' + e + ', получено ' + a);
+}
+
+function assertThrows_(fn, field, what) {
+  try {
+    fn();
+  } catch (e) {
+    if (!e.userMessage) throw e;
+    if (field && e.field !== field) throw new Error((what || '') + ': ошибка не по тому полю: ' + e.field + ' (' + e.userMessage + ')');
+    return e;
+  }
+  throw new Error((what || 'ожидалась ошибка') + ': сохранение прошло, а не должно было');
+}
+
+function mskIso_(s) {
+  return new Date(s + '+03:00').toISOString();
+}
+
+/** Создаёт сделку через API-логику и возвращает её карточку. */
+function testDeal_(potok, contact, extra) {
+  var deal = { potok: potok, channel: 'ВК', request: 'Тестовый запрос' };
+  for (var k in (extra || {})) deal[k] = extra[k];
+  var res = svcCreateDeal_(TEST_USER, { client: { name: 'Тест', contact: contact }, deal: deal, force: true });
+  return svcGetDeal_(TEST_USER, res.dealId);
+}
+
+function selfTestCases_() {
+  var u = TEST_USER;
+  return [
+    ['Нормализация ника', function () {
+      assertEq_(normNick_(' @Ivan.Petrov '), 'ivan.petrov');
+      assertEq_(normNick_('https://www.instagram.com/Ivan_P/?igsh=abc'), 'ivan_p');
+      assertEq_(normNick_('instagram.com/maria.s/'), 'maria.s');
+    }],
+    ['Нормализация телефона: 8…, +7…, 10 цифр', function () {
+      assertEq_(normPhone_('8 (916) 123-45-67'), '79161234567', '8…');
+      assertEq_(normPhone_('+7 916 123 45 67'), '79161234567', '+7…');
+      assertEq_(normPhone_('916-123-45-67'), '79161234567', '10 цифр');
+    }],
+    ['Нормализация почты', function () {
+      assertEq_(normalizeClient_({ email: '  Ivan@Mail.RU ' }).email, 'ivan@mail.ru');
+    }],
+    ['ID GetCourse из ссылки на профиль', function () {
+      var c = normalizeClient_({ dialogUrl: 'https://uvnschool.ru/user/control/user/update/id/481550966' });
+      assertEq_(c.gcId, '481550966');
+    }],
+    ['Определение типа контакта', function () {
+      assertEq_(detectContact_('@Lena.Buh').field, 'nick');
+      assertEq_(detectContact_('https://vk.com/id123').field, 'dialogUrl');
+      assertEq_(detectContact_('lena@mail.ru').field, 'email');
+      assertEq_(detectContact_('+7 (916) 123-45-67').field, 'phone');
+      assertEq_(detectContact_('481550966').field, 'gcId');
+    }],
+    ['Клиент без контакта не сохраняется', function () {
+      assertThrows_(function () {
+        svcCreateDeal_(u, { client: { name: 'Без контакта' }, deal: { channel: 'ВК', request: 'x' } });
+      }, 'contact');
+    }],
+    ['Дубли по каждому из пяти полей', function () {
+      svcCreateDeal_(u, {
+        client: { name: 'Анна', nick: 'anna.buh', dialogUrl: 'https://vk.com/anna_buh', gcId: '111222333', email: 'anna@mail.ru', phone: '79001112233' },
+        deal: { channel: 'ВК', request: 'дубли' }
+      });
+      var cases = {
+        nick: { nick: '@Anna.Buh' },
+        dialogUrl: { dialogUrl: 'http://vk.com/anna_buh/' },
+        gcId: { gcId: '111222333' },
+        email: { email: 'ANNA@mail.ru ' },
+        phone: { phone: '8 900 111-22-33' }
+      };
+      Object.keys(cases).forEach(function (f) {
+        var found = svcFindDuplicates_(u, cases[f]);
+        assertEq_(found.length, 1, 'дубль по ' + f);
+        assertEq_(found[0].name, 'Анна', 'дубль по ' + f);
+      });
+      assertEq_(svcFindDuplicates_(u, { name: 'Анна', nick: 'другая' }).length, 0, 'совпадение только по имени');
+    }],
+    ['Создание с дублем: без force — список похожих, с force — новый клиент', function () {
+      var draft = { name: 'Анна 2', contact: '@anna.buh' };
+      var res = svcCreateDeal_(u, { client: draft, deal: { channel: 'ВК', request: 'x' } });
+      assertEq_(res.duplicates.length, 1, 'найден дубль');
+      var forced = svcCreateDeal_(u, { client: draft, deal: { channel: 'ВК', request: 'x' }, force: true });
+      if (!forced.dealId) throw new Error('сделка не создана');
+    }],
+    ['Задачи по умолчанию и начальная стадия по потоку', function () {
+      var a = testDeal_('Входящее', '@t.in').deal;
+      assertEq_([a.stage, a.nextTask, a.taskAt], ['Новое', 'Ответить клиенту', TEST_NOW.toISOString()], 'Входящее');
+      var b = testDeal_('Неоплаченный заказ', '@t.unpaid').deal;
+      assertEq_([b.stage, b.nextTask, b.taskAt], ['Заказ создан', 'Написать по заказу', mskIso_('2026-10-05T12:10:00')], 'Неоплаченный заказ');
+      var c = testDeal_('Реактивация', '@t.react').deal;
+      assertEq_([c.stage, c.nextTask, c.taskAt], ['В диалоге', 'Написать повторно', mskIso_('2026-10-06T10:00:00')], 'Реактивация');
+    }],
+    ['При создании пишется касание «Обращение»', function () {
+      var card = testDeal_('Входящее', '@t.lead');
+      assertEq_([card.touches.length, card.touches[0].type, card.touches[0].text], [1, 'Обращение', 'Тестовый запрос']);
+    }],
+    ['Сумма подставляется из тарифа', function () {
+      var d = testDeal_('Входящее', '@t.tariff', { course: 'ЯБ', tariff: 'Золотая середина' }).deal;
+      assertEq_(d.amount, 89900);
+      var upd = svcUpdateDeal_(u, d.id, { course: 'УСН', tariff: 'Необходимый минимум' }).deal;
+      assertEq_(upd.amount, 29900, 'после смены тарифа');
+      var manual = svcUpdateDeal_(u, d.id, { amount: 25000 }).deal;
+      assertEq_(manual.amount, 25000, 'ручная сумма');
+    }],
+    ['«Оплачено»: нужны сумма и способ оплаты; задача и причина очищаются', function () {
+      var d = testDeal_('Входящее', '@t.paid').deal;
+      assertThrows_(function () { svcUpdateDeal_(u, d.id, { stage: 'Оплачено', payMethod: 'Полная' }); }, 'amount');
+      assertThrows_(function () { svcUpdateDeal_(u, d.id, { stage: 'Оплачено', amount: 89900 }); }, 'payMethod');
+      var res = svcUpdateDeal_(u, d.id, { stage: 'Оплачено', amount: 89900, payMethod: 'Полная' });
+      assertEq_([res.deal.nextTask, res.deal.taskAt, res.deal.lostReason], ['', '', '']);
+      assertEq_(res.deal.paidAt, mskIso_('2026-10-05T00:00:00'), 'дата оплаты по умолчанию — сегодня');
+      assertEq_(res.newTouches[0].text, 'Новое → Оплачено, 89 900 ₽', 'касание «Смена стадии»');
+    }],
+    ['«Отказ»: нужна причина; задача очищается', function () {
+      var d = testDeal_('Входящее', '@t.lost').deal;
+      assertThrows_(function () { svcUpdateDeal_(u, d.id, { stage: 'Отказ' }); }, 'lostReason');
+      var res = svcUpdateDeal_(u, d.id, { stage: 'Отказ', lostReason: 'Нет денег' });
+      assertEq_([res.deal.nextTask, res.deal.taskAt], ['', '']);
+      assertEq_(res.newTouches[0].text, 'Новое → Отказ: Нет денег');
+    }],
+    ['«Отложено»: дата задачи не раньше завтра', function () {
+      var d = testDeal_('Входящее', '@t.later').deal;
+      assertThrows_(function () { svcUpdateDeal_(u, d.id, { stage: 'Отложено', taskAt: '2026-10-05' }); }, 'taskAt');
+      var res = svcUpdateDeal_(u, d.id, { stage: 'Отложено', taskAt: '2026-10-07' });
+      assertEq_(res.deal.taskAt, mskIso_('2026-10-07T10:00:00'), 'время по умолчанию');
+    }],
+    ['Открытые стадии: без даты задачи не сохраняется', function () {
+      var d = testDeal_('Входящее', '@t.open').deal;
+      ['Новое', 'В диалоге', 'Курс подобран', 'Заказ создан'].forEach(function (st) {
+        assertThrows_(function () { svcUpdateDeal_(u, d.id, { stage: st, taskAt: '' }); }, 'taskAt', st);
+      });
+    }],
+    ['Повторное открытие закрытой сделки', function () {
+      var d = testDeal_('Входящее', '@t.reopen').deal;
+      svcUpdateDeal_(u, d.id, { stage: 'Отказ', lostReason: 'Другое' });
+      var res = svcUpdateDeal_(u, d.id, { stage: 'В диалоге', taskAt: '2026-10-06', nextTask: 'Вернуться' });
+      assertEq_(res.deal.stage, 'В диалоге');
+    }],
+    ['Касание «Написал»: «Новое» → «В диалоге» и задача «Написать повторно»', function () {
+      var d = testDeal_('Входящее', '@t.wrote').deal;
+      var res = svcAddTouch_(u, d.id, { type: 'Написал', text: '' });
+      assertEq_([res.deal.stage, res.deal.nextTask, res.deal.taskAt],
+        ['В диалоге', 'Написать повторно', mskIso_('2026-10-06T10:00:00')]);
+      var card = svcGetDeal_(u, d.id);
+      var types = card.touches.map(function (t) { return t.type; }).sort();
+      assertEq_(types, ['Написал', 'Обращение', 'Смена стадии'].sort(), 'журнал');
+      var stageTouch = card.touches.filter(function (t) { return t.type === 'Смена стадии'; })[0];
+      assertEq_(stageTouch.text, 'Новое → В диалоге');
+    }],
+    ['Касание со своей задачей не перезаписывается задачей по умолчанию', function () {
+      var d = testDeal_('Реактивация', '@t.own').deal;
+      var res = svcAddTouch_(u, d.id, { type: 'Написал', nextTask: 'Позвонить после отпуска', nextTaskDate: '2026-10-20' });
+      assertEq_([res.deal.nextTask, res.deal.taskAt], ['Позвонить после отпуска', mskIso_('2026-10-20T10:00:00')]);
+    }],
+    ['Заметка не меняет задачу', function () {
+      var d = testDeal_('Реактивация', '@t.note').deal;
+      var res = svcAddTouch_(u, d.id, { type: 'Заметка менеджера', text: 'Думает' });
+      assertEq_(res.deal.taskAt, d.taskAt);
+    }],
+    ['Подстановка переменных шаблона', function () {
+      var vars = templateVars_({ course: 'ЯБ', tariff: '', amount: 89900 }, { name: 'Ирина' }, u);
+      var r = fillTemplate_('{Имя}, «{Курс}» {Тариф}за {Сумма}. {Менеджер}', vars);
+      assertEq_(r.text, 'Ирина, «ЯБ» за 89 900 ₽. Тест Менеджер');
+      assertEq_(r.missing, ['Тариф']);
+    }],
+    ['Копирование шаблона пишет касание «Шаблон»', function () {
+      var d = testDeal_('Входящее', '@t.tpl').deal;
+      var res = svcLogTemplateUse_(u, d.id, 'T001');
+      assertEq_([res.touch.type, res.touch.text], ['Шаблон', 'Шаблон: Оплата поступила']);
+      assertEq_(res.deal.stage, 'В диалоге');
+    }],
+    ['Правка клиента: дубль с другим клиентом и удаление последнего контакта', function () {
+      var a = svcCreateDeal_(u, { client: { name: 'Ольга', nick: 'olga.one' }, deal: { channel: 'ВК', request: 'x' }, force: true });
+      svcCreateDeal_(u, { client: { name: 'Олег', nick: 'oleg.two' }, deal: { channel: 'ВК', request: 'x' }, force: true });
+      assertThrows_(function () { svcUpdateClient_(u, a.clientId, { nick: '@Oleg.Two' }); }, 'nick', 'дубль');
+      assertEq_(svcUpdateClient_(u, a.clientId, { nick: '@Olga.One', phone: '89001234567' }).phone, '79001234567', 'свой же ник не дубль');
+      svcUpdateClient_(u, a.clientId, { phone: '' });
+      assertThrows_(function () { svcUpdateClient_(u, a.clientId, { nick: '' }); }, 'nick', 'последний контакт');
+    }],
+    ['Формулы отчёта на тестовом наборе', function () {
+      var d = function (s) { return new Date(s + 'T12:00:00+03:00'); };
+      var deals = [
+        { createdAt: d('2026-09-01'), channel: 'ВК', potok: 'Входящее', stage: 'Оплачено', paidAt: d('2026-09-10'), amount: 50000, course: 'ЯБ' },
+        { createdAt: d('2026-09-15'), channel: 'ВК', potok: 'Входящее', stage: 'Отказ', lostReason: 'Нет денег' },
+        { createdAt: d('2026-09-20'), channel: 'Инстаграм', potok: 'Реактивация', stage: 'В диалоге' },
+        { createdAt: d('2026-09-30'), channel: 'Инстаграм', potok: 'Входящее', stage: 'Оплачено', paidAt: d('2026-10-02'), amount: 30000, course: 'УСН' },
+        { createdAt: d('2026-08-25'), channel: 'Почта', potok: 'Входящее', stage: 'Оплачено', paidAt: d('2026-09-05'), amount: 20000, course: 'УСН' }
+      ];
+      var r = computeReport_(deals, parseTaskDate_('2026-09-01', '00:00'), mskDayStart_(parseTaskDate_('2026-09-30', '00:00'), 1));
+      assertEq_(r.leads, 4, 'обращения');
+      assertEq_(r.byChannel, { 'ВК': 2, 'Инстаграм': 2 }, 'по каналам');
+      assertEq_(r.byPotok, { 'Входящее': 3, 'Реактивация': 1 }, 'по потокам');
+      assertEq_(r.paidFromLeads, 2, 'оплачено из обращений');
+      assertEq_(r.conversion, 0.5, 'конверсия');
+      assertEq_(r.revenue, 70000, 'выручка по дате оплаты');
+      assertEq_(r.byCourse, { 'ЯБ': { count: 1, revenue: 50000 }, 'УСН': { count: 1, revenue: 20000 } }, 'по курсам');
+      assertEq_(r.lostReasons, { 'Нет денег': 1 }, 'причины отказов');
+      assertEq_(r.funnel, { 'Оплачено': 2, 'Отказ': 1, 'В диалоге': 1 }, 'стадии');
+      var empty = computeReport_([], parseTaskDate_('2026-09-01', '00:00'), parseTaskDate_('2026-09-02', '00:00'));
+      assertEq_(empty.conversion, 0, 'нет обращений — конверсия 0');
+    }],
+    ['Отчёт недоступен менеджеру', function () {
+      assertThrows_(function () { svcGetReport_(TEST_USER, '2026-09-01', '2026-09-30'); });
+      svcGetReport_(TEST_BOSS, '2026-09-01', '2026-09-30');
+    }],
+    ['«Сегодня»: просрочено, на сегодня, без ответа, счётчики', function () {
+      var t = svcGetToday_(u);
+      if (!t.fresh.length) throw new Error('нет блока «Без ответа»');
+      if (!t.today.length) throw new Error('нет задач на сегодня');
+      if (t.counters.created < 5) throw new Error('счётчик обращений: ' + t.counters.created);
+      if (t.counters.paid !== 1) throw new Error('счётчик оплат: ' + t.counters.paid);
+    }]
+  ];
 }

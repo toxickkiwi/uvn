@@ -102,6 +102,9 @@ var DATE_FIELDS = {
   date: true
 };
 
+/** Префикс имён листов. runSelfTests() ставит 'TEST_', чтобы работать на временных копиях. */
+var TABLE_PREFIX_ = '';
+
 var CACHE_TTL_SEC = 300;
 var CACHE_KEY_REF = 'ref:v1';
 var LOCK_WAIT_MS = 10000;
@@ -126,7 +129,7 @@ function userError_(message, field) {
  * Строки — объекты с полями из SCHEMA и служебным _row (номер строки на листе).
  */
 function Table_(name) {
-  var sheet = SpreadsheetApp.getActive().getSheetByName(name);
+  var sheet = SpreadsheetApp.getActive().getSheetByName(TABLE_PREFIX_ + name);
   if (!sheet) {
     throw userError_('В таблице нет листа «' + name + '». Откройте меню CRM → «Подготовить таблицу».');
   }
@@ -252,7 +255,10 @@ function withLock_(fn) {
  * Справочная информация из таблицы, кэш на 5 минут.
  * { dicts: {potoki: [...], ...}, tariffs: [...], templates: [...], users: [...], settings: {KEY: value} }
  */
+var REF_MEMO_ = null;
+
 function getRef_() {
+  if (TABLE_PREFIX_) return REF_MEMO_ || (REF_MEMO_ = loadRef_());
   var cache = CacheService.getScriptCache();
   var hit = cache.get(CACHE_KEY_REF);
   if (hit) return JSON.parse(hit);
