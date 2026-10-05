@@ -118,6 +118,13 @@ test('«Нет доступа» называет причину: нет в сп�
   const sim4 = create({ workbook, email: 'marina@gmail.com' });
   sim4.ctx.SpreadsheetApp.getActive = () => { throw new Error('No access'); };
   assert.strictEqual(sim4.ctx.doGet({}).vars.reason, 'table');
+  sim4.ctx.SpreadsheetApp.getActive = () => { throw new Error('Exception: У вас нет разрешения на вызов функции "SpreadsheetApp.getActive"'); };
+  assert.strictEqual(sim4.ctx.doGet({}).vars.reason, 'scope');
+  let asked = 0;
+  sim4.ctx.ScriptApp.AuthMode = { FULL: 'FULL' };
+  sim4.ctx.ScriptApp.requireAllScopes = (m) => { asked++; assert.strictEqual(m, 'FULL'); };
+  sim4.ctx.doGet({});
+  assert.strictEqual(asked, 1, 'doGet просит недостающие разрешения');
 });
 
 test('неактивный пользователь не проходит', () => {

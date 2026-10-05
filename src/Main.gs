@@ -5,6 +5,11 @@
 var APP_TITLE = 'CRM «Учёт в народ»';
 
 function doGet(e) {
+  // Google разрешает при входе снять галочки с части разрешений. Тогда чтение таблицы падает.
+  // requireAllScopes сам останавливает выполнение и заново показывает экран разрешений.
+  // Вызывается вне try: его остановку нельзя перехватывать.
+  if (typeof ScriptApp.requireAllScopes === 'function') ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
+
   var user = null;
   var reason = '';
   try {
@@ -18,7 +23,7 @@ function doGet(e) {
   } catch (err) {
     // Чтение таблицы под этим человеком не удалось: нет доступа к таблице или ошибка Google.
     console.warn('doGet: ' + currentEmail_() + ': ' + err);
-    reason = 'table';
+    reason = /разрешени|permission|authoriz/i.test(String(err)) ? 'scope' : 'table';
   }
   var page;
   if (!user) {

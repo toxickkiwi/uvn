@@ -16,7 +16,9 @@
     <div class="box">
       <h1>Нет доступа</h1>
       <p>Вы вошли как <span class="email"><?= email ?></span></p>
-      <? if (reason === 'table') { ?>
+      <? if (reason === 'scope') { ?>
+        <p class="why">Причина: при входе были отмечены не все разрешения Google. Откройте <a href="https://myaccount.google.com/connections" target="_blank">myaccount.google.com/connections</a>, найдите CRM, нажмите «Удалить все подключения», затем снова откройте эту ссылку и на экране разрешений поставьте галочку «Выбрать все».</p>
+      <? } else if (reason === 'table') { ?>
         <p class="why">Причина: у этой почты нет доступа к таблице CRM. Владелец таблицы должен открыть «Настройки доступа» и добавить эту почту с правом «Редактор».</p>
       <? } else if (reason === 'inactive') { ?>
         <p class="why">Причина: почта есть в листе «Пользователи», но в колонке «Активен» не стоит TRUE.</p>
