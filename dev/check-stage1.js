@@ -104,6 +104,22 @@ test('посторонний видит «Нет доступа» со свое�
   assert.ok(/Нет доступа/.test(res.error));
 });
 
+test('«Нет доступа» называет причину: нет в списке, русские буквы, неактивен, нет доступа к таблице', () => {
+  const sim = create({ workbook, email: 'stranger@gmail.com' });
+  assert.strictEqual(sim.ctx.doGet({}).vars.reason, 'notlisted');
+  const wb = JSON.parse(JSON.stringify(workbook));
+  wb['Пользователи'][2][0] = 'marinа@gmail.com'; // «а» русская
+  const sim2 = create({ workbook: wb, email: 'marina@gmail.com' });
+  assert.strictEqual(sim2.ctx.doGet({}).vars.reason, 'typo');
+  wb['Пользователи'][2][0] = 'marina@gmail.com';
+  wb['Пользователи'][2][4] = false;
+  const sim3 = create({ workbook: wb, email: 'marina@gmail.com' });
+  assert.strictEqual(sim3.ctx.doGet({}).vars.reason, 'inactive');
+  const sim4 = create({ workbook, email: 'marina@gmail.com' });
+  sim4.ctx.SpreadsheetApp.getActive = () => { throw new Error('No access'); };
+  assert.strictEqual(sim4.ctx.doGet({}).vars.reason, 'table');
+});
+
 test('неактивный пользователь не проходит', () => {
   const wb = JSON.parse(JSON.stringify(workbook));
   wb['Пользователи'][1][4] = false;

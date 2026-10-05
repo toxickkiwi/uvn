@@ -6,16 +6,25 @@ var APP_TITLE = 'CRM «Учёт в народ»';
 
 function doGet(e) {
   var user = null;
+  var reason = '';
   try {
     user = currentUser_();
+    if (!user) {
+      // Список сотрудников мог поменяться за последние 5 минут — перечитываем без кэша.
+      clearRefCache_();
+      user = currentUser_();
+    }
+    if (!user) reason = noAccessReason_(currentEmail_());
   } catch (err) {
-    // У посторонних нет прав на таблицу — чтение «Пользователи» падает. Это тоже «нет доступа».
-    console.warn('doGet: ' + err);
+    // Чтение таблицы под этим человеком не удалось: нет доступа к таблице или ошибка Google.
+    console.warn('doGet: ' + currentEmail_() + ': ' + err);
+    reason = 'table';
   }
   var page;
   if (!user) {
     page = HtmlService.createTemplateFromFile('NoAccess');
     page.email = currentEmail_() || 'не удалось определить';
+    page.reason = reason;
     return page.evaluate()
       .setTitle('Нет доступа — ' + APP_TITLE)
       .addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -24,6 +33,30 @@ function doGet(e) {
   return page.evaluate()
     .setTitle(APP_TITLE)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** Похожие русские и латинские буквы: «uchetvnarod» с русской «с» или «о» выглядит так же, но не совпадает. */
+var LOOKALIKE_ = { 'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'к': 'k', 'м': 'm', 'т': 't', 'н': 'h', 'в': 'b' };
+
+function latinize_(s) {
+  return String(s || '').toLowerCase().replace(/[\u200b-\u200d\ufeff\s]/g, '').replace(/[а-я]/g, function (c) { return LOOKALIKE_[c] || c; });
+}
+
+/**
+ * Почему человека нет в списке — только про его собственную почту, чужие почты не раскрываются:
+ * 'inactive' — есть, но «Активен» не TRUE; 'typo' — записана с русскими буквами или невидимыми символами;
+ * 'notlisted' — нет совсем.
+ */
+function noAccessReason_(email) {
+  if (!email) return 'noemail';
+  var users = getRef_().users;
+  for (var i = 0; i < users.length; i++) {
+    if (users[i].email === email) return 'inactive';
+  }
+  for (var j = 0; j < users.length; j++) {
+    if (users[j].email && latinize_(users[j].email) === latinize_(email)) return 'typo';
+  }
+  return 'notlisted';
 }
 
 /** Вставка содержимого другого HTML-файла проекта: <?!= include('Styles') ?> */
