@@ -23,7 +23,7 @@ function doGet(e) {
   } catch (err) {
     // Чтение таблицы под этим человеком не удалось: нет доступа к таблице или ошибка Google.
     console.warn('doGet: ' + currentEmail_() + ': ' + err);
-    reason = /разрешени|permission|authoriz/i.test(String(err)) ? 'scope' : 'table';
+    reason = isScopeError_(err) ? 'scope' : 'table';
   }
   var page;
   if (!user) {
@@ -38,6 +38,11 @@ function doGet(e) {
   return page.evaluate()
     .setTitle(APP_TITLE)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** Ошибка «нет разрешения на вызов …»: человек при входе снял галочку с части разрешений Google. */
+function isScopeError_(e) {
+  return /нет разрешения на вызов|permission to call|required permissions|Требуемые разрешения/i.test(String(e && e.message ? e.message : e));
 }
 
 /** Похожие русские и латинские буквы: «uchetvnarod» с русской «с» или «о» выглядит так же, но не совпадает. */
@@ -110,6 +115,10 @@ function api_(fn) {
       var res = { ok: false, error: e.userMessage };
       if (e.field) res.field = e.field;
       return res;
+    }
+    if (isScopeError_(e)) {
+      console.warn('api: не хватает разрешений Google: ' + e);
+      return { ok: false, field: 'scope', error: 'Google не дал сайту доступ к таблице: при входе были отмечены не все разрешения. Нажмите «Дать разрешения» и на экране Google поставьте галочку «Выбрать все».' };
     }
     console.error(e && e.stack ? e.stack : e);
     return { ok: false, error: 'Что-то пошло не так на сервере. Повторите действие; если ошибка не уходит — сообщите руководителю. (' + (e && e.message ? e.message : e) + ')' };

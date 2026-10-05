@@ -125,6 +125,8 @@ test('«Нет доступа» называет причину: нет в сп�
   sim4.ctx.ScriptApp.requireAllScopes = (m) => { asked++; assert.strictEqual(m, 'FULL'); };
   sim4.ctx.doGet({});
   assert.strictEqual(asked, 1, 'doGet просит недостающие разрешения');
+  const api = sim4.ctx.api_(() => { throw new Error('Exception: У вас нет разрешения на вызов функции "SpreadsheetApp.getActive". Требуемые разрешения: …'); });
+  assert.strictEqual(api.field, 'scope', 'API тоже узнаёт нехватку разрешений');
 });
 
 test('неактивный пользователь не проходит', () => {

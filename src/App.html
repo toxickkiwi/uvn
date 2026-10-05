@@ -22,7 +22,10 @@
       var runner = google.script.run
         .withSuccessHandler(function (res) {
           if (res && res.ok) resolve(res.data);
-          else reject(res || { error: 'Пустой ответ сервера. Обновите страницу.' });
+          else {
+            if (res && res.field === 'scope') store.scopeError = res.error;
+            reject(res || { error: 'Пустой ответ сервера. Обновите страницу.' });
+          }
         })
         .withFailureHandler(function (err) {
           var msg = err && err.message ? err.message : String(err);
@@ -193,6 +196,7 @@
     saving: 0,
     savedAt: 0,
     newLeadOpen: false,
+    scopeError: '',
     todayVersion: 0
   });
 
@@ -1031,6 +1035,8 @@
       '    <span class="save-state">{{ saveState }}</span>' +
       '    <span class="who">{{ store.boot.user.name }}</span>' +
       '  </div></header>' +
+      '  <div v-if="store.scopeError" class="main" style="padding-bottom:0"><div class="banner"><span class="grow">{{ store.scopeError }}</span>' +
+      '    <a class="btn primary" :href="store.boot.appUrl" target="_top">Дать разрешения</a></div></div>' +
       '  <main class="main">' +
       '    <today-view v-if="store.route.name === \'today\'"></today-view>' +
       '    <deal-view v-else-if="store.route.name === \'deal\'" :id="store.route.id"></deal-view>' +
