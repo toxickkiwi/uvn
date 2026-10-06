@@ -14,7 +14,9 @@ var SHEET = {
   DICTS: 'Справочники',
   TEMPLATES: 'Шаблоны',
   USERS: 'Пользователи',
-  SETTINGS: 'Настройки'
+  SETTINGS: 'Настройки',
+  TASKS: 'Задания',
+  PEOPLE: 'Участники'
 };
 
 /** Поле JSON → заголовок колонки. Порядок — порядок колонок нового листа. */
@@ -86,7 +88,9 @@ SCHEMA[SHEET.TEMPLATES] = {
   situation: 'Ситуация',
   title: 'Название',
   text: 'Текст',
-  active: 'Активен'
+  active: 'Активен',
+  taskId: 'Задание',
+  segment: 'Сегмент'
 };
 SCHEMA[SHEET.USERS] = {
   email: 'Почта',
@@ -99,13 +103,47 @@ SCHEMA[SHEET.SETTINGS] = {
   key: 'Ключ',
   value: 'Значение'
 };
+/** Задания по спискам (рассылки): у подзадания заполнен «Родитель». */
+SCHEMA[SHEET.TASKS] = {
+  id: 'ID',
+  name: 'Название',
+  parentId: 'Родитель',
+  start: 'Начало',
+  end: 'Конец',
+  segments: 'Сегменты',
+  description: 'Описание',
+  createdAt: 'Создано',
+  author: 'Автор'
+};
+/** Люди из списков заданий и что с ними сделали. */
+SCHEMA[SHEET.PEOPLE] = {
+  id: 'ID',
+  taskId: 'ID задания',
+  segment: 'Сегмент',
+  firstName: 'Имя',
+  lastName: 'Фамилия',
+  email: 'Почта',
+  phone: 'Телефон',
+  gcId: 'ID GetCourse',
+  vk: 'ВК',
+  source: 'Откуда пришёл',
+  status: 'Статус',
+  templateId: 'Шаблон',
+  channel: 'Канал',
+  sentAt: 'Отправлено',
+  repliedAt: 'Ответил',
+  clientId: 'ID клиента',
+  dealId: 'ID сделки',
+  note: 'Комментарий',
+  updatedAt: 'Изменено'
+};
 
 /**
  * Колонки, добавленные после запуска. Пока «Подготовить таблицу» их не создала,
  * приложение работает без них: читает пустое значение и не пишет.
  */
 var OPTIONAL_COLUMNS = {
-  prospect: true, otherLinks: true, channel: true,
+  prospect: true, otherLinks: true, channel: true, taskId: true, segment: true,
   priorContact: true, priorWhere: true, priorWhen: true, priorNote: true
 };
 
@@ -116,7 +154,11 @@ var DATE_FIELDS = {
   taskAt: true,
   updatedAt: true,
   date: true,
-  priorWhen: true
+  priorWhen: true,
+  start: true,
+  end: true,
+  sentAt: true,
+  repliedAt: true
 };
 
 /** Префикс имён листов. runSelfTests() ставит 'TEST_', чтобы работать на временных копиях. */
@@ -321,7 +363,9 @@ function loadRef_() {
       situation: String(t.situation).trim(),
       title: String(t.title).trim(),
       text: String(t.text),
-      active: toBool_(t.active)
+      active: toBool_(t.active),
+      taskId: String(t.taskId || '').trim(),
+      segment: String(t.segment || '').trim()
     };
   });
 

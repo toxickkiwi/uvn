@@ -34,7 +34,9 @@ var DROPDOWNS = [
   { sheet: 'Касания', header: 'Тип', dict: 'Типы касаний' },
   { sheet: 'Касания', header: 'Канал', dict: 'Каналы' },
   { sheet: 'Сделки', header: 'Где был контакт', dict: 'Каналы' },
-  { sheet: 'Сделки', header: 'Был контакт', list: ['Да', 'Нет'] }
+  { sheet: 'Сделки', header: 'Был контакт', list: ['Да', 'Нет'] },
+  { sheet: 'Участники', header: 'Статус', list: ['Не написали', 'Написали', 'Ответил', 'Не интересно', 'Купил'] },
+  { sheet: 'Участники', header: 'Канал', dict: 'Каналы' }
 ];
 
 /** Колонки, где цифры — это текст (телефон, номера): формат «обычный текст», чтобы не терялись нули. */
@@ -42,7 +44,9 @@ var TEXT_COLUMNS = [
   { sheet: 'Клиенты', header: 'ID GetCourse' },
   { sheet: 'Клиенты', header: 'Телефон' },
   { sheet: 'Сделки', header: 'Номер заказа GetCourse' },
-  { sheet: 'Пользователи', header: 'Telegram chat ID' }
+  { sheet: 'Пользователи', header: 'Telegram chat ID' },
+  { sheet: 'Участники', header: 'ID GetCourse' },
+  { sheet: 'Участники', header: 'Телефон' }
 ];
 
 /**

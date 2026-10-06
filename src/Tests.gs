@@ -81,6 +81,8 @@ function createTestSheets_(ss) {
   put(SHEET.USERS, [values_(SCHEMA[SHEET.USERS]),
     [TEST_USER.email, TEST_USER.name, TEST_USER.role, '', true],
     [TEST_BOSS.email, TEST_BOSS.name, TEST_BOSS.role, '', true]]);
+  put(SHEET.TASKS, [values_(SCHEMA[SHEET.TASKS])]);
+  put(SHEET.PEOPLE, [values_(SCHEMA[SHEET.PEOPLE])]);
   var settings = [values_(SCHEMA[SHEET.SETTINGS])];
   DEFAULT_SETTINGS.forEach(function (s) { settings.push([s.key, s.value]); });
   put(SHEET.SETTINGS, settings);
@@ -363,6 +365,47 @@ function selfTestCases_() {
     ['Поток «Исходящее»: стадия «В диалоге», задача «Написать повторно» завтра', function () {
       var d = testDeal_('Исходящее', '@t.out').deal;
       assertEq_([d.potok, d.stage, d.nextTask], ['Исходящее', 'В диалоге', 'Написать повторно']);
+    }],
+    ['Задания: задание и подзадание, загрузка списка, повторы и связь с CRM', function () {
+      var parent = svcSaveTask_(u, { name: 'Отработка БК, октябрь', start: '2026-10-05', end: '2026-10-18' });
+      var sub = svcSaveTask_(u, { name: 'Были на эфирах', parentId: parent.id, start: '2026-10-05', end: '2026-10-11', segments: ['Был на всех'] });
+      assertEq_([sub.parentId, sub.segments], [parent.id, ['Был на всех']], 'подзадание');
+      assertThrows_(function () { svcSaveTask_(u, { name: 'x', start: '2026-10-10', end: '2026-10-01' }); }, 'end', 'конец раньше начала');
+      svcCreateDeal_(u, { client: { name: 'Полина', email: 'polina@mail.ru' }, deal: { channel: 'ВК', request: 'x', priorContact: 'Нет' } });
+      var res = svcImportPeople_(u, sub.id, 'Был на всех', [
+        { firstName: 'Полина', lastName: 'М', email: 'Polina@mail.ru', phone: '+79170000001', gcId: '111', vk: '2144', source: 'instagram' },
+        { firstName: 'Айсылу', email: 'ai@mail.ru', phone: '89170000002', gcId: '222' },
+        { firstName: 'Айсылу повтор', gcId: '222' },
+        { firstName: '', lastName: '' }
+      ]);
+      assertEq_([res.added, res.skipped, res.linked], [2, 2, 1], 'загружено / пропущено / найдено в CRM');
+      var t = svcGetTask_(u, sub.id);
+      var pol = t.people.filter(function (p) { return p.firstName === 'Полина'; })[0];
+      assertEq_([pol.phone, pol.vk, pol.status, !!pol.clientId], ['79170000001', 'https://vk.com/id2144', 'Не написали', true], 'нормализация и связь');
+      var again = svcImportPeople_(u, sub.id, 'Был на всех', [{ firstName: 'Айсылу', phone: '+7 917 000-00-02' }]);
+      assertEq_(again.added, 0, 'повторная загрузка не дублирует');
+    }],
+    ['Задания: шаблон, «написали», «ответил» → сделка, статистика по шаблонам', function () {
+      var task = svcListTasks_(u).filter(function (x) { return x.name === 'Были на эфирах'; })[0];
+      var tpl = svcSaveTaskTemplate_(u, { taskId: task.id, segment: 'Был на всех', title: 'Вариант 1', text: '{Имя}, добрый день!' });
+      assertEq_([tpl.taskId, tpl.situation], [task.id, 'Были на эфирах'], 'шаблон привязан к заданию');
+      var people = svcGetTask_(u, task.id).people;
+      assertEq_(svcGetTask_(u, task.id).templates.length, 1, 'шаблон виден в задании');
+      var a = svcMarkPersonSent_(u, people[0].id, tpl.id, 'Инстаграм');
+      assertEq_([a.status, a.templateId, a.channel], ['Написали', tpl.id, 'Инстаграм'], 'отметка отправки');
+      svcMarkPersonSent_(u, people[1].id, tpl.id, 'ВК');
+      var b = svcSetPersonStatus_(u, people[0].id, 'Ответил');
+      if (!b.dealId) throw new Error('сделка не создана');
+      var card = svcGetDeal_(u, b.dealId);
+      assertEq_([card.deal.potok, card.deal.channel], ['Исходящее', 'Инстаграм'], 'сделка из задания');
+      var types = card.touches.map(function (x) { return x.type; });
+      if (types.indexOf('Шаблон') < 0 || types.indexOf('Клиент ответил') < 0) throw new Error('история: ' + types.join(', '));
+      svcSetPersonStatus_(u, people[1].id, 'Не интересно', 'Уже учится');
+      var st = svcGetTask_(u, task.id).stats;
+      assertEq_([st.total, st.sent, st.answered, st.replied, st.no], [2, 2, 2, 1, 1], 'итоги');
+      assertEq_([st.byTemplate[tpl.id].sent, st.byTemplate[tpl.id].answered], [2, 2], 'по шаблону');
+      var parent = svcListTasks_(u).filter(function (x) { return x.id === task.parentId; })[0];
+      assertEq_(parent.totalStats.total, 2, 'родитель суммирует подзадания');
     }],
     ['«Сегодня»: просрочено, на сегодня, без ответа, счётчики', function () {
       var t = svcGetToday_(u);

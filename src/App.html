@@ -177,6 +177,21 @@
     try { window.localStorage.setItem('crm.' + key, JSON.stringify(value)); } catch (e) { /* приватный режим */ }
   }
 
+  /** Подгрузка внешней библиотеки по требованию (чтение Excel нужно только при загрузке списка). */
+  var scriptCache = {};
+  function loadScript(src) {
+    if (!scriptCache[src]) {
+      scriptCache[src] = new Promise(function (resolve, reject) {
+        var el = document.createElement('script');
+        el.src = src;
+        el.onload = resolve;
+        el.onerror = function () { delete scriptCache[src]; reject(new Error('load')); };
+        document.head.appendChild(el);
+      });
+    }
+    return scriptCache[src];
+  }
+
   function copyText(text) {
     function fallback() {
       var ta = document.createElement('textarea');
@@ -210,7 +225,9 @@
     scopeError: '',
     todayData: null,
     boardData: null,
+    tasksData: null,
     lastTab: 'today',
+    lastHash: '',
     dealCache: {},
     todayVersion: 0
   });
@@ -252,12 +269,17 @@
     h = String(h || '').replace(/^#/, '');
     var m = /^deal\/([\w-]+)/.exec(h);
     if (m) return { name: 'deal', id: m[1] };
-    if (h === 'board' || h === 'report' || h === 'guide') return { name: h, id: '' };
+    var t = /^task\/([\w-]+)/.exec(h);
+    if (t) return { name: 'task', id: t[1] };
+    if (h === 'board' || h === 'report' || h === 'guide' || h === 'tasks') return { name: h, id: '' };
     return { name: 'today', id: '' };
   }
   function go(hash) {
     store.route = parseHash(hash);
-    if (store.route.name !== 'deal') store.lastTab = store.route.name;
+    if (store.route.name !== 'deal') {
+      store.lastTab = store.route.name === 'task' ? 'tasks' : store.route.name;
+      store.lastHash = hash;
+    }
     try { google.script.history.push(null, null, hash); } catch (e) { /* локальный просмотр */ }
     window.scrollTo(0, 0);
   }
@@ -404,7 +426,10 @@
       load: function (background) {
         var self = this;
         if (!background) self.loading = true;
+        var mark = self._edits || 0;
         call('getToday').then(function (data) {
+          // Пока шёл запрос, менеджер что-то нажал — этот ответ уже устарел, берём свежий.
+          if ((self._edits || 0) !== mark) { self.load(true); return; }
           self.data = data;
           store.todayData = data;
           self.error = '';
@@ -418,6 +443,7 @@
       /** Убирает сделку из блоков и кладёт заново по тем же правилам, что getToday. */
       place: function (d) {
         var self = this;
+        self._edits = (self._edits || 0) + 1;
         ['overdue', 'today', 'fresh'].forEach(function (k) {
           self.data[k] = self.data[k].filter(function (x) { return x.id !== d.id; });
         });
@@ -786,7 +812,7 @@
         var c = String(this.edit.course || '').trim();
         return this.courseCustomForced || (c !== '' && courseList().indexOf(c) < 0);
       },
-      backLabel: function () { return { board: 'Доска', report: 'Отчёт', guide: 'Как работать' }[store.lastTab] || 'Сегодня'; },
+      backLabel: function () { return { board: 'Доска', report: 'Отчёт', guide: 'Как работать', tasks: 'Задание' }[store.lastTab] || 'Сегодня'; },
       quick: function () { return [{ n: 0, label: 'Сегодня' }, { n: 1, label: '+1 день' }, { n: 2, label: '+2 дня' }, { n: 7, label: '+1 неделя' }]; }
     },
     watch: { id: { immediate: true, handler: function () { this.load(); } } },
@@ -797,7 +823,7 @@
       dirOf: function (type) { return touchDir(type, this.deal ? this.deal.potok : ''); },
       priceOf: function (t) { return tariffPrice(this.edit.course, t); },
       // Страница живёт в iframe Google, история браузера там ненадёжна — возвращаемся на «Сегодня».
-      back: function () { go(store.lastTab || 'today'); },
+      back: function () { go(store.lastHash || store.lastTab || 'today'); },
       chLabel: chLabel,
       nowInput: function () { return toInputDT(new Date().toISOString()); },
       linksOf: function (v) { return String(v || '').split(/[\s,;]+/).filter(function (x) { return x; }); },
@@ -812,8 +838,10 @@
         var cached = store.dealCache[id];
         if (cached) self.show(cached);
         else { self.loading = true; self.deal = null; }
+        var mark = self._edits || 0;
         call('getDeal', id).then(function (data) {
           if (self.id !== id) return;
+          if ((self._edits || 0) !== mark) return; // свежие правки уже на экране
           store.dealCache[id] = data;
           self.show(data);
           document.title = (data.client ? data.client.name + ' — ' : '') + 'CRM';
@@ -833,6 +861,7 @@
         if (!this.touch.channel || this.dicts.channels.indexOf(this.touch.channel) < 0) this.touch.channel = data.deal.channel;
       },
       remember: function () {
+        this._edits = (this._edits || 0) + 1;
         store.dealCache[this.deal.id] = { deal: this.deal, client: this.client, touches: this.touches.filter(function (t) { return !t._pending; }), otherDeals: this.otherDeals };
       },
       resetEdit: function () {
@@ -940,6 +969,7 @@
         var pending = { type: payload.type, text: payload.text, channel: payload.channel, date: payload.date || new Date().toISOString(),
           authorName: store.boot.user.name, _pending: true };
         this.touches = [pending].concat(this.touches);
+        this._edits = (this._edits || 0) + 1;
         var keepText = this.touch.text;
         this.touch.text = '';
         this.touch.date = '';
@@ -1264,7 +1294,9 @@
       load: function (background) {
         var self = this;
         if (!background) self.loading = true;
+        var mark = self._edits || 0;
         call('getBoard', {}).then(function (data) {
+          if ((self._edits || 0) !== mark) { self.load(true); return; }
           self.data = data;
           store.boardData = data;
           self.loading = false;
@@ -1318,6 +1350,7 @@
       },
       /** Кладёт сделку в нужный список по её стадии. */
       replace: function (d) {
+        this._edits = (this._edits || 0) + 1;
         var id = d.id;
         var drop = function (list) { return list.filter(function (x) { return x.id !== id; }); };
         var data = { open: drop(this.data.open), paid: drop(this.data.paid), lost: drop(this.data.lost), from: this.data.from, to: this.data.to };
@@ -1542,17 +1575,515 @@
     }
   };
 
+  /* ---------- Задания по спискам ---------- */
+  var PERSON_STATUS_CLASS = { 'Не написали': 'ps-todo', 'Написали': 'ps-sent', 'Ответил': 'ps-replied', 'Не интересно': 'ps-no', 'Купил': 'ps-bought' };
+  function pctOf(a, b) { return b ? Math.round(a / b * 100) + '%' : '—'; }
+  function periodOf(t) {
+    var now = nowMs();
+    var s = t.start ? new Date(t.start).getTime() : null;
+    var e = t.end ? new Date(t.end).getTime() + DAY : null;
+    if (e && now >= e) return { k: 'done', t: 'завершено' };
+    if (s && now < s) return { k: 'future', t: 'впереди' };
+    return { k: 'now', t: 'идёт сейчас' };
+  }
+
+  /** Окно создания и правки задания. */
+  var TaskModal = {
+    props: ['task', 'tasks', 'parentId'],
+    emits: ['close', 'saved'],
+    data: function () {
+      var t = this.task || {};
+      return {
+        f: { id: t.id || '', name: t.name || '', parentId: t.parentId || this.parentId || '', start: toInputDate(t.start), end: toInputDate(t.end),
+          segments: (t.segments || []).join('\n'), description: t.description || '' },
+        busy: false, errField: ''
+      };
+    },
+    template:
+      '<div class="overlay" @keydown.esc="$emit(\'close\')">' +
+      '  <div class="modal">' +
+      '    <div class="modal-head"><h2>{{ f.id ? "Задание " + f.id : (f.parentId ? "Новое подзадание" : "Новое задание") }}</h2><button class="btn ghost sm" style="margin-left:auto" @click="$emit(\'close\')">✕</button></div>' +
+      '    <div class="modal-body">' +
+      '      <div class="field"><label>Название</label><input class="input" :class="{\'has-error\': errField===\'name\'}" v-model="f.name" ref="first" placeholder="Например: отработать тех, кто был на прямых эфирах"></div>' +
+      '      <div class="field"><label>Входит в задание</label><select class="select" v-model="f.parentId"><option value="">— это главное задание —</option>' +
+      '        <option v-for="t in parents" :key="t.id" :value="t.id">{{ t.name }}</option></select></div>' +
+      '      <div class="row"><div class="field grow"><label>С</label><input class="input" type="date" v-model="f.start"></div>' +
+      '        <div class="field grow"><label>По</label><input class="input" :class="{\'has-error\': errField===\'end\'}" type="date" v-model="f.end"></div></div>' +
+      '      <div class="field"><label>Сегменты — по одному на строку</label><textarea class="textarea" v-model="f.segments" placeholder="Был на всех&#10;Был на первом&#10;Был на первом и втором"></textarea></div>' +
+      '      <div class="field"><label>Описание (необязательно)</label><textarea class="textarea" style="min-height:44px" v-model="f.description"></textarea></div>' +
+      '    </div>' +
+      '    <div class="modal-foot"><button class="btn" @click="$emit(\'close\')">Отмена</button><button class="btn primary" :disabled="busy" @click="submit">Сохранить</button></div>' +
+      '  </div>' +
+      '</div>',
+    computed: {
+      parents: function () { var id = this.f.id; return (this.tasks || []).filter(function (t) { return !t.parentId && t.id !== id; }); }
+    },
+    mounted: function () { var r = this.$refs.first; if (r) r.focus(); },
+    methods: {
+      submit: function () {
+        var self = this;
+        this.busy = true;
+        var payload = Object.assign({}, this.f, { segments: this.f.segments.split('\n') });
+        save(call('saveTask', payload)).then(function (t) { self.busy = false; self.$emit('saved', t); },
+          function (err) { self.busy = false; self.errField = err.field || ''; });
+      }
+    }
+  };
+
+  var TasksView = {
+    components: { TaskModal: TaskModal },
+    data: function () { return { loading: !store.tasksData, error: '', tasks: store.tasksData || [], modal: null, showDone: false }; },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Задания</h1><span class="muted">рассылки по спискам: кому написать, каким шаблоном, кто ответил</span>' +
+      '    <button class="btn primary sm" style="margin-left:auto" @click="modal = {}">+ Задание</button></div>' +
+      '  <div v-if="loading && !tasks.length" class="loading">Загружаю…</div>' +
+      '  <div v-else-if="error" class="panel">{{ error }}</div>' +
+      '  <div v-else-if="!tasks.length" class="panel empty-state"><p><b>Заданий пока нет.</b></p><p class="muted">Например: «Отработка БК, октябрь» с подзаданиями «Были на эфирах» (5–11 октября) и «Смотрели записи» (12–18 октября).</p>' +
+      '    <button class="btn primary" @click="modal = {}">Создать первое задание</button></div>' +
+      '  <template v-else>' +
+      '    <div v-for="g in groups" :key="g.parent.id" class="task-group" :class="\'tg-\' + periodOf(g.parent).k">' +
+      '      <div class="task-card main" @click="open(g.parent)">' +
+      '        <div class="row wrap"><b class="grow">{{ g.parent.name }}</b><span class="period" :class="\'p-\' + periodOf(g.parent).k">{{ periodOf(g.parent).t }}</span></div>' +
+      '        <div class="muted small">{{ dates(g.parent) }}</div>' +
+      '        <task-progress :s="g.parent.totalStats || g.parent.stats"></task-progress>' +
+      '      </div>' +
+      '      <div v-for="k in g.kids" :key="k.id" class="task-card sub" @click="open(k)">' +
+      '        <div class="row wrap"><span class="grow">↳ {{ k.name }}</span><span class="period" :class="\'p-\' + periodOf(k).k">{{ periodOf(k).t }}</span></div>' +
+      '        <div class="muted small">{{ dates(k) }}<span v-if="k.segments.length"> · {{ k.segments.join(", ") }}</span></div>' +
+      '        <task-progress :s="k.stats"></task-progress>' +
+      '      </div>' +
+      '      <button class="btn ghost sm add-sub" @click="modal = {parentId: g.parent.id}">+ подзадание</button>' +
+      '    </div>' +
+      '  </template>' +
+      '  <task-modal v-if="modal" :task="null" :tasks="tasks" :parent-id="modal.parentId" @close="modal = null" @saved="onSaved"></task-modal>' +
+      '</div>',
+    computed: {
+      groups: function () {
+        var all = this.tasks;
+        return all.filter(function (t) { return !t.parentId; }).map(function (p) {
+          return { parent: p, kids: all.filter(function (k) { return k.parentId === p.id; }) };
+        });
+      }
+    },
+    created: function () { this.load(); },
+    methods: {
+      periodOf: periodOf,
+      dates: function (t) { return (t.start ? fmtDate(t.start, false) : '…') + ' — ' + (t.end ? fmtDate(t.end, false) : '…'); },
+      open: function (t) { go('task/' + t.id); },
+      load: function () {
+        var self = this;
+        call('listTasks').then(function (list) { self.tasks = list; store.tasksData = list; self.loading = false; self.error = ''; },
+          function (err) { self.error = err.error; self.loading = false; });
+      },
+      onSaved: function (t) { this.modal = null; toast('Задание ' + t.id + ' сохранено'); go('task/' + t.id); }
+    }
+  };
+
+  var TaskProgress = {
+    props: ['s'],
+    template:
+      '<div class="tprog" v-if="s">' +
+      '  <div class="tprog-bar"><span class="tp-sent" :style="{width: w(s.sent - s.answered)}"></span><span class="tp-ans" :style="{width: w(s.answered)}"></span></div>' +
+      '  <div class="small muted">людей {{ s.total }} · написали {{ s.sent }} · ответили {{ s.answered }} <span v-if="s.sent">({{ pct(s.answered, s.sent) }})</span><span v-if="s.bought"> · купили {{ s.bought }}</span></div>' +
+      '</div>',
+    methods: {
+      w: function (n) { return (this.s.total ? n / this.s.total * 100 : 0) + '%'; },
+      pct: pctOf
+    }
+  };
+
+  TasksView.components.TaskProgress = TaskProgress;
+
+  /** Загрузка выгрузки GetCourse: файл .xlsx/.csv или вставка из таблицы. */
+  var ImportModal = {
+    props: ['task'],
+    emits: ['close', 'done'],
+    data: function () {
+      return { segment: (this.task.segments || [])[0] || '', newSegment: '', rows: null, cols: [], fileName: '', paste: '', busy: false, error: '' };
+    },
+    // Сегменты могли прийти позже, чем открылось окно, — тогда выбираем первый.
+    watch: { 'task.segments': function (v) { if (!this.segment && v && v.length) this.segment = v[0]; } },
+    template:
+      '<div class="overlay" @keydown.esc="$emit(\'close\')">' +
+      '  <div class="modal">' +
+      '    <div class="modal-head"><h2>Загрузить список людей</h2><button class="btn ghost sm" style="margin-left:auto" @click="$emit(\'close\')">✕</button></div>' +
+      '    <div class="modal-body">' +
+      '      <div class="field"><label>В какой сегмент</label><div class="seg">' +
+      '        <button v-for="s in task.segments" :key="s" type="button" class="btn sm" :class="{on: segment === s && !newSegment}" @click="segment = s; newSegment = \'\'">{{ s }}</button></div>' +
+      '        <input class="input" style="margin-top:6px" v-model="newSegment" placeholder="или новый сегмент, например «Был на первом»"></div>' +
+      '      <div class="field"><label>Выгрузка из GetCourse (Пользователи → Экспорт)</label>' +
+      '        <input type="file" accept=".xlsx,.xls,.csv" @change="onFile"><div class="hint" v-if="fileName">{{ fileName }}</div></div>' +
+      '      <details><summary class="small-link">или вставить строки из таблицы</summary>' +
+      '        <textarea class="textarea" v-model="paste" @input="onPaste" placeholder="Выделите в Excel или Google Таблице всё вместе с заголовками, скопируйте и вставьте сюда"></textarea></details>' +
+      '      <div v-if="error" class="hint err">{{ error }}</div>' +
+      '      <div v-if="rows" class="import-preview">' +
+      '        <b>Найдено людей: {{ rows.length }}</b>' +
+      '        <div class="small muted">Колонки: {{ cols.join(", ") || "не распознаны" }}</div>' +
+      '        <div class="small" v-for="(r, i) in rows.slice(0, 5)" :key="i">{{ r.firstName }} {{ r.lastName }} <span class="muted">{{ r.phone || r.email }}</span></div>' +
+      '        <div class="small muted" v-if="rows.length > 5">… и ещё {{ rows.length - 5 }}</div>' +
+      '      </div>' +
+      '    </div>' +
+      '    <div class="modal-foot"><button class="btn" @click="$emit(\'close\')">Отмена</button>' +
+      '      <button class="btn primary" :disabled="busy || !rows || !rows.length || !(newSegment || segment)" @click="submit">{{ busy ? "Загружаю…" : "Загрузить" }}</button></div>' +
+      '  </div>' +
+      '</div>',
+    methods: {
+      onFile: function (e) {
+        var self = this;
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+        self.fileName = file.name;
+        self.error = '';
+        loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js').then(function () {
+          var reader = new FileReader();
+          reader.onload = function () {
+            try {
+              var wb = window.XLSX.read(new Uint8Array(reader.result), { type: 'array' });
+              var ws = wb.Sheets[wb.SheetNames[0]];
+              self.parse(window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' }));
+            } catch (err) { self.error = 'Не удалось прочитать файл: ' + err.message; }
+          };
+          reader.readAsArrayBuffer(file);
+        }, function () { self.error = 'Не загрузилась программа чтения Excel. Проверьте интернет или вставьте строки из таблицы.'; });
+      },
+      onPaste: function () {
+        var lines = this.paste.split(/\r?\n/).filter(function (l) { return l.trim(); });
+        this.parse(lines.map(function (l) { return l.split('\t'); }));
+      },
+      /** Колонки выгрузки GetCourse → поля человека. Одинаковые заголовки (два «utm_source») — берём первое непустое. */
+      parse: function (table) {
+        if (!table || table.length < 2) { this.rows = null; this.error = 'Нужна строка заголовков и хотя бы одна строка с человеком.'; return; }
+        var head = table[0].map(function (h) { return String(h || '').trim().toLowerCase(); });
+        var map = {
+          gcId: ['id', 'id getcourse', 'id пользователя'], email: ['email', 'e-mail', 'почта'], firstName: ['имя'], lastName: ['фамилия'],
+          phone: ['телефон', 'phone'], vk: ['vk-id', 'vk id', 'вк'], source: ['utm_source', 'откуда пришел', 'откуда пришёл']
+        };
+        var idx = {};
+        var found = [];
+        Object.keys(map).forEach(function (f) {
+          idx[f] = [];
+          head.forEach(function (h, i) { if (map[f].indexOf(h) >= 0) idx[f].push(i); });
+          if (idx[f].length) found.push({ gcId: 'ID', email: 'почта', firstName: 'имя', lastName: 'фамилия', phone: 'телефон', vk: 'ВК', source: 'откуда' }[f]);
+        });
+        if (!idx.firstName.length && !idx.email.length && !idx.phone.length) { this.rows = null; this.error = 'Не нашла колонки «Имя», «Email» или «Телефон» в первой строке.'; return; }
+        this.cols = found;
+        this.error = '';
+        this.rows = table.slice(1).map(function (r) {
+          var o = {};
+          Object.keys(idx).forEach(function (f) {
+            o[f] = '';
+            idx[f].some(function (i) { var v = String(r[i] === undefined ? '' : r[i]).trim(); if (v && !(f === 'vk' && !/^\d+$/.test(v) && !/vk\./i.test(v))) { o[f] = v; return true; } return false; });
+          });
+          return o;
+        }).filter(function (o) { return o.firstName || o.email || o.phone || o.gcId; });
+      },
+      submit: function () {
+        var self = this;
+        this.busy = true;
+        save(call('importPeople', this.task.id, this.newSegment.trim() || this.segment, this.rows)).then(function (r) {
+          self.busy = false;
+          toast('Загружено ' + r.added + (r.skipped ? ', пропущено повторов ' + r.skipped : '') + (r.linked ? ', уже в CRM: ' + r.linked : ''));
+          self.$emit('done');
+        }, function () { self.busy = false; });
+      }
+    }
+  };
+
+  /** Человек из списка: контакты, шаблоны его сегмента, отметки. */
+  var PersonPanel = {
+    props: ['p', 'templates', 'task', 'hasNext'],
+    emits: ['close', 'changed', 'next'],
+    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false }; },
+    template:
+      '<div class="person-panel panel">' +
+      '  <div class="row"><h2 class="grow" style="margin:0">{{ p.name || "Без имени" }}</h2><button class="btn ghost sm" @click="$emit(\'close\')">✕</button></div>' +
+      '  <div class="row wrap" style="margin:6px 0 10px"><span class="chip">{{ p.segment || "без сегмента" }}</span><span class="pstatus" :class="cls(p.status)">{{ p.status }}</span>' +
+      '    <a v-if="p.dealId" href="#" @click.prevent="openDeal">сделка {{ p.dealId }} ↗</a><span v-else-if="p.clientId" class="small muted">есть в CRM ({{ p.clientId }})</span></div>' +
+      '  <div class="contacts">' +
+      '    <a v-if="p.vk" :href="p.vk" target="_blank" rel="noopener" class="btn sm">ВК ↗</a>' +
+      '    <a v-if="p.gcId && gcUrl" :href="gcUrl" target="_blank" rel="noopener" class="btn sm">GetCourse ↗</a>' +
+      '    <button v-if="p.phone" class="btn sm" @click="copy(p.phone)">📞 {{ p.phone }}</button>' +
+      '    <button v-if="p.email" class="btn sm" @click="copy(p.email)">✉ {{ p.email }}</button>' +
+      '    <span v-if="p.source" class="small muted">пришёл из: {{ p.source }}</span>' +
+      '  </div>' +
+      '  <div class="field" style="margin-top:12px"><label>Куда пишу</label><div class="seg"><button v-for="c in dicts.channels" :key="c" class="btn sm" :class="{on: channel === c}" @click="setChannel(c)">{{ c }}</button></div></div>' +
+      '  <div class="label">Шаблоны{{ p.segment ? " для «" + p.segment + "»" : "" }}</div>' +
+      '  <div v-if="!shown.length" class="muted small">Для этого сегмента шаблонов нет — добавьте на вкладке «Шаблоны» задания.</div>' +
+      '  <div v-for="t in shown" :key="t.id" class="ptpl" :class="{used: p.templateId === t.id}">' +
+      '    <div class="row"><b class="grow">{{ t.title }}</b><span class="small muted" v-if="t.segment && t.segment !== p.segment">{{ t.segment }}</span><span class="small" v-if="p.templateId === t.id">✓ отправлен</span></div>' +
+      '    <div class="tpl-text small" v-html="filled(t).html"></div>' +
+      '    <button class="btn primary sm" :disabled="busy" @click="copyAndMark(t)">Скопировать и отметить «написали»</button>' +
+      '  </div>' +
+      '  <a href="#" class="small-link" v-if="others.length && !showAll" @click.prevent="showAll = true">показать шаблоны других сегментов ({{ others.length }})</a>' +
+      '  <div class="field" style="margin-top:12px"><label>Что ответил</label><div class="seg">' +
+      '    <button class="btn sm ok-btn" :class="{on: p.status === \'Ответил\'}" :disabled="busy" @click="setStatus(\'Ответил\')">Ответил → в CRM</button>' +
+      '    <button class="btn sm" :class="{on: p.status === \'Не интересно\'}" :disabled="busy" @click="setStatus(\'Не интересно\')">Не интересно</button>' +
+      '    <button class="btn sm" :class="{on: p.status === \'Купил\'}" :disabled="busy" @click="setStatus(\'Купил\')">Купил</button>' +
+      '    <button class="btn ghost sm" v-if="p.status !== \'Не написали\'" :disabled="busy" @click="setStatus(\'Не написали\')">сбросить</button></div></div>' +
+      '  <div class="field"><label>Комментарий</label><input class="input" v-model="note" @change="saveNote" placeholder="например: перезвонить после 15-го"></div>' +
+      '  <div class="hint" v-if="p.sentAt">Написали {{ fmtDate(p.sentAt) }}<span v-if="p.channel"> в {{ p.channel }}</span><span v-if="p.repliedAt"> · ответ {{ fmtDate(p.repliedAt) }}</span></div>' +
+      '  <button v-if="hasNext" class="btn lg" style="margin-top:12px;width:100%" @click="$emit(\'next\')">Следующий, кому не написали →</button>' +
+      '</div>',
+    computed: {
+      dicts: function () { return store.boot.dicts; },
+      gcUrl: function () { var u = store.boot.settings.GC_USER_URL; return u ? fill(u, { id: this.p.gcId }) : ''; },
+      own: function () { var sg = this.p.segment; return this.templates.filter(function (t) { return !t.segment || t.segment === sg; }); },
+      others: function () { var sg = this.p.segment; return this.templates.filter(function (t) { return t.segment && t.segment !== sg; }); },
+      shown: function () { return this.showAll ? this.own.concat(this.others) : this.own; }
+    },
+    watch: { p: function (v) { this.note = v.note || ''; } },
+    methods: {
+      fmtDate: fmtDate,
+      cls: function (s) { return PERSON_STATUS_CLASS[s] || ''; },
+      guessChannel: function () { return /insta/i.test(this.p.source) ? 'Инстаграм' : /vk/i.test(this.p.source) || this.p.vk ? 'ВК' : ''; },
+      setChannel: function (c) { this.channel = c; writePref('taskChannel', { v: c }); },
+      filled: function (t) { return fillTemplate(t.text, { 'Имя': this.p.firstName || '', 'Менеджер': store.boot.user.name, 'Курс': '', 'Тариф': '', 'Сумма': '' }); },
+      copy: function (v) { copyText(String(v)).then(function () { toast('Скопировано'); }); },
+      openDeal: function () { go('deal/' + this.p.dealId); },
+      copyAndMark: function (t) {
+        var self = this;
+        if (!this.channel) { toast('Выберите, куда пишете: ВК, Инстаграм…', true); return; }
+        copyText(this.filled(t).text).then(function () {
+          toast('Скопировано — вставьте в ' + self.channel);
+          self.busy = true;
+          self.$emit('changed', Object.assign({}, self.p, { status: self.p.status === 'Не написали' ? 'Написали' : self.p.status, templateId: t.id, channel: self.channel, sentAt: new Date().toISOString() }));
+          save(call('markPersonSent', self.p.id, t.id, self.channel)).then(function (np) { self.busy = false; self.$emit('changed', np); },
+            function () { self.busy = false; });
+        }, function () { toast('Браузер не дал скопировать', true); });
+      },
+      setStatus: function (s) {
+        var self = this;
+        this.busy = true;
+        save(call('setPersonStatus', this.p.id, s, this.note)).then(function (np) {
+          self.busy = false;
+          self.$emit('changed', np);
+          if (s === 'Ответил' && np.dealId) toast('Создана сделка ' + np.dealId + ' — она теперь в CRM');
+        }, function () { self.busy = false; });
+      },
+      saveNote: function () {
+        var self = this;
+        save(call('setPersonStatus', this.p.id, this.p.status, this.note)).then(function (np) { self.$emit('changed', np); });
+      }
+    }
+  };
+
+  /** Шаблоны задания: список и форма. */
+  var TaskTemplates = {
+    props: ['task', 'templates', 'stats'],
+    emits: ['saved'],
+    data: function () { return { form: null, busy: false, errField: '' }; },
+    template:
+      '<div>' +
+      '  <div class="row" style="margin-bottom:10px"><span class="muted grow">В тексте можно писать {Имя} и {Менеджер} — подставятся сами.</span>' +
+      '    <button class="btn primary sm" @click="edit({})">+ Шаблон</button></div>' +
+      '  <div v-if="form" class="panel tpl-form">' +
+      '    <div class="row" style="align-items:flex-start"><div class="field grow"><label>Название</label><input class="input" :class="{\'has-error\': errField===\'title\'}" v-model="form.title" placeholder="Например: Вариант 1 — про вовлечённость"></div>' +
+      '      <div class="field grow"><label>Для сегмента</label><select class="select" v-model="form.segment"><option value="">для всех</option><option v-for="s in task.segments" :key="s" :value="s">{{ s }}</option></select></div></div>' +
+      '    <div class="field"><label>Текст</label><textarea class="textarea" style="min-height:160px" :class="{\'has-error\': errField===\'text\'}" v-model="form.text" placeholder="{Имя}, добрый день!&#10;Это {Менеджер}, ассистент Марины Фёдоровны, школа «Учёт в народ»…"></textarea></div>' +
+      '    <div class="row"><button class="btn primary" :disabled="busy" @click="submit">Сохранить</button><button class="btn" @click="form = null">Отмена</button>' +
+      '      <label class="small" v-if="form.id" style="margin-left:auto"><input type="checkbox" v-model="form.hide"> скрыть шаблон</label></div>' +
+      '  </div>' +
+      '  <div v-if="!templates.length && !form" class="muted">Шаблонов пока нет. Добавьте 2–3 варианта для каждого сегмента — потом статистика покажет, на какой отвечают лучше.</div>' +
+      '  <div v-for="t in templates" :key="t.id" class="panel tpl-item-card">' +
+      '    <div class="row wrap"><b class="grow">{{ t.title }}</b><span class="chip">{{ t.segment || "для всех" }}</span>' +
+      '      <span class="small muted" v-if="st(t)">отправлено {{ st(t).sent }} · ответили {{ st(t).answered }} ({{ pct(st(t).answered, st(t).sent) }})</span>' +
+      '      <button class="btn ghost sm" @click="edit(t)">изменить</button></div>' +
+      '    <div class="pre small" style="margin-top:6px">{{ t.text }}</div>' +
+      '  </div>' +
+      '</div>',
+    methods: {
+      pct: pctOf,
+      st: function (t) { return this.stats && this.stats.byTemplate[t.id]; },
+      edit: function (t) { this.form = { id: t.id || '', title: t.title || '', segment: t.segment || '', text: t.text || '', hide: false }; this.errField = ''; },
+      submit: function () {
+        var self = this;
+        this.busy = true;
+        var f = this.form;
+        save(call('saveTaskTemplate', { id: f.id, taskId: this.task.id, title: f.title, segment: f.segment, text: f.text, active: !f.hide })).then(function () {
+          self.busy = false;
+          self.form = null;
+          toast('Шаблон сохранён');
+          self.$emit('saved');
+        }, function (err) { self.busy = false; self.errField = err.field || ''; });
+      }
+    }
+  };
+
+  var TaskView = {
+    components: { TaskModal: TaskModal, ImportModal: ImportModal, PersonPanel: PersonPanel, TaskTemplates: TaskTemplates, TaskProgress: TaskProgress, BarList: BarList },
+    props: ['id'],
+    data: function () {
+      return { loading: true, error: '', data: null, tab: 'people', fSeg: '', fStatus: '', q: '', current: null, importOpen: false, editOpen: false, limit: 100 };
+    },
+    template:
+      '<div>' +
+      '  <div v-if="loading && !data" class="loading">Загружаю задание…</div>' +
+      '  <div v-else-if="error" class="panel">{{ error }}</div>' +
+      '  <template v-else-if="data">' +
+      '    <div class="deal-head">' +
+      '      <button class="btn ghost sm" @click="back">← Задания</button>' +
+      '      <h1>{{ data.task.name }}</h1><span class="period" :class="\'p-\' + period.k">{{ period.t }}</span>' +
+      '      <span class="faint">{{ data.task.id }} · {{ dates }}</span>' +
+      '      <button class="btn ghost sm" @click="editOpen = true">изменить</button>' +
+      '    </div>' +
+      '    <div class="muted" v-if="data.task.description" style="margin:-4px 0 10px">{{ data.task.description }}</div>' +
+      '    <task-progress :s="data.stats"></task-progress>' +
+      '    <div class="subtabs"><button v-for="t in tabs" :key="t.k" class="btn sm" :class="{on: tab === t.k}" @click="tab = t.k">{{ t.t }}</button></div>' +
+
+      '    <template v-if="tab === \'people\'">' +
+      '      <div class="filters">' +
+      '        <button class="btn sm" :class="{on: !fSeg}" @click="fSeg = \'\'">все сегменты <span class="badge">{{ data.people.length }}</span></button>' +
+      '        <button v-for="s in data.task.segments" :key="s" class="btn sm" :class="{on: fSeg === s}" @click="fSeg = s">{{ s }} <span class="badge">{{ countSeg(s) }}</span></button>' +
+      '        <select class="select compact" v-model="fStatus"><option value="">все статусы</option><option v-for="s in data.statuses" :key="s">{{ s }}</option></select>' +
+      '        <input class="input compact" v-model="q" placeholder="имя, телефон, почта">' +
+      '        <button class="btn primary sm" style="margin-left:auto" @click="importOpen = true">Загрузить список</button>' +
+      '      </div>' +
+      '      <div v-if="!data.people.length" class="panel empty-state"><p><b>В задании пока нет людей.</b></p><p class="muted">Выгрузите список из GetCourse (Пользователи → фильтр → Экспорт) и загрузите файл.</p>' +
+      '        <button class="btn primary" @click="importOpen = true">Загрузить список</button></div>' +
+      '      <div v-else class="task-work" :class="{\'has-panel\': current}">' +
+      '        <div class="list people-list">' +
+      '          <div v-if="!filtered.length" class="empty">Никого не найдено</div>' +
+      '          <div v-for="p in filtered.slice(0, limit)" :key="p.id" class="prow" :class="{active: current && current.id === p.id}" @click="current = p">' +
+      '            <div class="grow" style="min-width:0"><b>{{ p.name || "Без имени" }}</b> <span class="small muted">{{ p.segment }}</span>' +
+      '              <div class="small muted ellipsis">{{ [p.phone, p.email].filter(Boolean).join(" · ") }}<span v-if="p.clientId"> · в CRM</span></div></div>' +
+      '            <span class="pstatus" :class="cls(p.status)">{{ p.status }}</span>' +
+      '          </div>' +
+      '          <button v-if="filtered.length > limit" class="more" @click="limit += 200">Показать ещё {{ filtered.length - limit }}</button>' +
+      '        </div>' +
+      '        <person-panel v-if="current" :key="current.id" :p="current" :templates="data.templates" :task="data.task" :has-next="!!nextTodo" @close="current = null" @changed="onChanged" @next="current = nextTodo"></person-panel>' +
+      '      </div>' +
+      '    </template>' +
+
+      '    <task-templates v-else-if="tab === \'templates\'" :task="data.task" :templates="data.templates" :stats="data.stats" @saved="load"></task-templates>' +
+
+      '    <template v-else>' +
+      '      <div class="kpis">' +
+      '        <div class="kpi"><div class="num">{{ data.stats.total }}</div><div class="cap">людей в списке</div></div>' +
+      '        <div class="kpi"><div class="num">{{ data.stats.sent }}</div><div class="cap">написали</div><div class="sub">{{ pct(data.stats.sent, data.stats.total) }} списка</div></div>' +
+      '        <div class="kpi"><div class="num">{{ data.stats.answered }}</div><div class="cap">ответили</div><div class="sub">{{ pct(data.stats.answered, data.stats.sent) }} от написанных</div></div>' +
+      '        <div class="kpi"><div class="num">{{ data.stats.no }}</div><div class="cap">не интересно</div></div>' +
+      '        <div class="kpi"><div class="num">{{ data.stats.bought }}</div><div class="cap">купили</div></div>' +
+      '      </div>' +
+      '      <div class="rgrid">' +
+      '        <section class="panel"><h2>Какой шаблон работает лучше</h2>' +
+      '          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Шаблон</th><th>Сегмент</th><th>Отправлено</th><th>Ответили</th><th>% ответов</th></tr></thead>' +
+      '            <tbody><tr v-for="r in tplRows" :key="r.id"><td>{{ r.title }}</td><td>{{ r.segment || "все" }}</td><td>{{ r.sent }}</td><td>{{ r.answered }}</td><td><b>{{ pct(r.answered, r.sent) }}</b></td></tr>' +
+      '              <tr v-if="!tplRows.length"><td colspan="5" class="muted">Ещё никому не написали</td></tr></tbody></table></div></section>' +
+      '        <section class="panel"><h2>По сегментам</h2>' +
+      '          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Сегмент</th><th>Людей</th><th>Написали</th><th>Ответили</th><th>% ответов</th></tr></thead>' +
+      '            <tbody><tr v-for="(v, k) in data.stats.bySegment" :key="k"><td>{{ k }}</td><td>{{ v.total }}</td><td>{{ v.sent }}</td><td>{{ v.answered }}</td><td><b>{{ pct(v.answered, v.sent) }}</b></td></tr></tbody></table></div></section>' +
+      '        <section class="panel"><h2>По каналам</h2>' +
+      '          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Канал</th><th>Написали</th><th>Ответили</th><th>% ответов</th></tr></thead>' +
+      '            <tbody><tr v-for="(v, k) in data.stats.byChannel" :key="k"><td>{{ k }}</td><td>{{ v.sent }}</td><td>{{ v.answered }}</td><td><b>{{ pct(v.answered, v.sent) }}</b></td></tr></tbody></table></div></section>' +
+      '      </div>' +
+      '    </template>' +
+      '    <import-modal v-if="importOpen" :task="data.task" @close="importOpen = false" @done="importOpen = false; load()"></import-modal>' +
+      '    <task-modal v-if="editOpen" :task="data.task" :tasks="store.tasksData || []" @close="editOpen = false" @saved="onTaskSaved"></task-modal>' +
+      '  </template>' +
+      '</div>',
+    computed: {
+      store: function () { return store; },
+      tabs: function () {
+        return [{ k: 'people', t: 'Люди' }, { k: 'templates', t: 'Шаблоны (' + (this.data ? this.data.templates.length : 0) + ')' }, { k: 'stats', t: 'Статистика' }];
+      },
+      period: function () { return periodOf(this.data.task); },
+      dates: function () { var t = this.data.task; return (t.start ? fmtDate(t.start, false) : '…') + ' — ' + (t.end ? fmtDate(t.end, false) : '…'); },
+      filtered: function () {
+        var s = this.fSeg, st = this.fStatus, q = this.q.trim().toLowerCase();
+        return this.data.people.filter(function (p) {
+          if (s && p.segment !== s) return false;
+          if (st && p.status !== st) return false;
+          if (q && (p.name + ' ' + p.phone + ' ' + p.email).toLowerCase().indexOf(q) < 0) return false;
+          return true;
+        });
+      },
+      nextTodo: function () {
+        var cur = this.current;
+        var list = this.filtered;
+        var i = cur ? list.findIndex(function (p) { return p.id === cur.id; }) : -1;
+        for (var j = i + 1; j < list.length; j++) if (list[j].status === 'Не написали') return list[j];
+        return null;
+      },
+      tplRows: function () {
+        var by = this.data.stats.byTemplate;
+        var tpls = this.data.templates;
+        return Object.keys(by).map(function (id) {
+          var t = tpls.filter(function (x) { return x.id === id; })[0];
+          return { id: id, title: t ? t.title : (id || 'без шаблона'), segment: t ? t.segment : '', sent: by[id].sent, answered: by[id].answered };
+        }).sort(function (a, b) { return (b.sent ? b.answered / b.sent : 0) - (a.sent ? a.answered / a.sent : 0); });
+      }
+    },
+    watch: { id: { immediate: true, handler: function () { this.current = null; this.load(); } } },
+    methods: {
+      pct: pctOf,
+      cls: function (s) { return PERSON_STATUS_CLASS[s] || ''; },
+      countSeg: function (s) { return this.data.people.filter(function (p) { return p.segment === s; }).length; },
+      back: function () { go('tasks'); },
+      load: function () {
+        var self = this;
+        var id = this.id;
+        if (!self.data || self.data.task.id !== id) self.loading = true;
+        call('getTask', id).then(function (d) {
+          if (self.id !== id) return;
+          self.data = d;
+          self.loading = false;
+          self.error = '';
+          if (self.current) self.current = d.people.filter(function (p) { return p.id === self.current.id; })[0] || null;
+          store.tasksData = null;
+        }, function (err) { self.error = err.error; self.loading = false; });
+      },
+      onTaskSaved: function (t) {
+        this.editOpen = false;
+        this.data = Object.assign({}, this.data, { task: Object.assign({}, this.data.task, t) });
+        this.load();
+      },
+      onChanged: function (np) {
+        var people = this.data.people.map(function (p) { return p.id === np.id ? Object.assign({}, p, np) : p; });
+        this.data = Object.assign({}, this.data, { people: people, stats: localStats(people) });
+        this.current = people.filter(function (p) { return p.id === np.id; })[0];
+        store.tasksData = null;
+      }
+    }
+  };
+
+  /** То же, что taskStats_ на сервере, — чтобы цифры менялись сразу после отметки. */
+  function localStats(people) {
+    var ANS = ['Ответил', 'Не интересно', 'Купил'];
+    var s = { total: 0, sent: 0, answered: 0, replied: 0, no: 0, bought: 0, byTemplate: {}, bySegment: {}, byChannel: {} };
+    var bump = function (map, key, st) {
+      var k = key || '—';
+      var x = map[k] || (map[k] = { sent: 0, answered: 0, replied: 0, no: 0, bought: 0, total: 0 });
+      x.total++;
+      if (st !== 'Не написали') x.sent++;
+      if (ANS.indexOf(st) >= 0) x.answered++;
+    };
+    people.forEach(function (p) {
+      var st = p.status || 'Не написали';
+      s.total++;
+      if (st !== 'Не написали') s.sent++;
+      if (ANS.indexOf(st) >= 0) s.answered++;
+      if (st === 'Ответил') s.replied++;
+      if (st === 'Не интересно') s.no++;
+      if (st === 'Купил') s.bought++;
+      bump(s.bySegment, p.segment, st);
+      if (st !== 'Не написали') { bump(s.byTemplate, p.templateId, st); bump(s.byChannel, p.channel, st); }
+    });
+    return s;
+  }
+
   /* ---------- Корень ---------- */
   var Root = {
     components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox,
-      BoardView: BoardView, ReportView: ReportView, GuideView: GuideView },
+      BoardView: BoardView, ReportView: ReportView, GuideView: GuideView, TasksView: TasksView, TaskView: TaskView },
     template:
       '<div v-if="!store.boot" class="loading">{{ store.bootError || "Загрузка…" }}</div>' +
       '<template v-else>' +
       '  <header class="topbar"><div class="topbar-in">' +
       '    <span class="brand">Учёт в народ · CRM</span>' +
-      '    <nav class="tabs"><a v-for="t in tabs" :key="t.hash" class="tab" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)">{{ t.title }}</a></nav>' +
+      '    <nav class="tabs"><a v-for="t in tabs" :key="t.hash" class="tab" :class="{active: store.route.name === t.name || store.route.name === t.also}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)">{{ t.title }}</a></nav>' +
       '    <search-box ref="search"></search-box>' +
+      '    <a class="btn ghost sm help-mobile" href="#guide" @click.prevent="go(\'guide\')" title="Как работать">?</a>' +
       '    <button class="btn primary" @click="store.newLeadOpen = true" title="Горячая клавиша N">+ Обращение</button>' +
       '    <span class="save-state">{{ saveState }}</span>' +
       '    <span class="who">{{ store.boot.user.name }}</span>' +
@@ -1565,11 +2096,13 @@
       '    <board-view v-else-if="store.route.name === \'board\'"></board-view>' +
       '    <report-view v-else-if="store.route.name === \'report\'"></report-view>' +
       '    <guide-view v-else-if="store.route.name === \'guide\'"></guide-view>' +
+      '    <tasks-view v-else-if="store.route.name === \'tasks\'"></tasks-view>' +
+      '    <task-view v-else-if="store.route.name === \'task\'" :id="store.route.id"></task-view>' +
       '  </main>' +
       '  <nav class="bottom-nav">' +
-      '    <a v-for="t in tabs.slice(0, 2)" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.title }}</a>' +
+      '    <a v-for="t in tabs.slice(0, 2)" :key="t.hash" :class="{active: store.route.name === t.name || store.route.name === t.also}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.title }}</a>' +
       '    <button class="bn-add" @click="store.newLeadOpen = true" aria-label="Новое обращение">+</button>' +
-      '    <a v-for="t in tabs.slice(2)" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.short || t.title }}</a>' +
+      '    <a v-for="t in tabs.slice(2, 4)" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.short || t.title }}</a>' +
       '  </nav>' +
       '  <new-lead-modal v-if="store.newLeadOpen" @close="store.newLeadOpen = false"></new-lead-modal>' +
       '</template>' +
@@ -1579,6 +2112,7 @@
       tabs: function () {
         return [
           { name: 'today', hash: 'today', title: 'Сегодня', ico: '☀' },
+          { name: 'tasks', hash: 'tasks', title: 'Задания', ico: '✉', also: 'task' },
           { name: 'board', hash: 'board', title: 'Доска', ico: '▦' },
           { name: 'report', hash: 'report', title: 'Отчёт', ico: '▤' },
           { name: 'guide', hash: 'guide', title: 'Как работать', short: 'Помощь', ico: '?' }
