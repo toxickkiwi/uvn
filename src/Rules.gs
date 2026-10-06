@@ -140,7 +140,7 @@ function normalizeClient_(draft) {
     var d = detectContact_(draft.contact);
     if (d.field) c[d.field] = d.value;
   }
-  ['name', 'nick', 'dialogUrl', 'gcId', 'email', 'phone'].forEach(function (f) {
+  ['name', 'nick', 'dialogUrl', 'gcId', 'email', 'phone', 'otherLinks'].forEach(function (f) {
     if (Object.prototype.hasOwnProperty.call(draft, f)) c[f] = draft[f];
   });
   if ('name' in c) c.name = String(c.name || '').trim().replace(/\s+/g, ' ');
@@ -149,6 +149,7 @@ function normalizeClient_(draft) {
   if ('gcId' in c) c.gcId = normGcId_(c.gcId);
   if ('email' in c) c.email = normEmail_(c.email);
   if ('phone' in c) c.phone = normPhone_(c.phone);
+  if ('otherLinks' in c) c.otherLinks = splitLinks_(c.otherLinks).join('\n');
   if (c.dialogUrl && !c.gcId) {
     var id = gcIdFromUrl_(c.dialogUrl);
     if (id) c.gcId = id;
@@ -167,7 +168,18 @@ function validateClientFields_(c) {
 }
 
 function hasContact_(c) {
-  return CONTACT_FIELDS.some(function (f) { return String(c[f] || '').trim() !== ''; });
+  return CONTACT_FIELDS.some(function (f) { return String(c[f] || '').trim() !== ''; }) ||
+    splitLinks_(c.otherLinks).length > 0;
+}
+
+/** «Другие ссылки» — по одной на строку (или через запятую / пробел). */
+function splitLinks_(v) {
+  return String(v || '').split(/[\s,;]+/).map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+}
+
+/** Ключи всех ссылок клиента: основная + другие. */
+function linkKeys_(c) {
+  return [c.dialogUrl].concat(splitLinks_(c.otherLinks)).map(urlKey_).filter(function (k) { return k; });
 }
 
 /**
@@ -184,10 +196,24 @@ function findDuplicateClients_(clients, draft, excludeId) {
     if (c.gcId && normGcId_(x.gcId) === c.gcId) hit.push('gcId');
     if (c.email && normEmail_(x.email) === c.email) hit.push('email');
     if (c.phone && normPhone_(x.phone) === c.phone) hit.push('phone');
-    if (c.dialogUrl && urlKey_(x.dialogUrl) && urlKey_(x.dialogUrl) === urlKey_(c.dialogUrl)) hit.push('dialogUrl');
+    var mine = linkKeys_(c);
+    if (mine.length) {
+      var theirs = linkKeys_(x);
+      if (mine.some(function (k) { return theirs.indexOf(k) >= 0; })) hit.push('dialogUrl');
+    }
     if (hit.length) out.push({ client: x, fields: hit });
   });
   return out;
+}
+
+/* ---------- Контакт до CRM (запрос руководителя) ---------- */
+
+/** «Был контакт»: «Да», «Нет» или пусто (не отмечено). */
+function normPrior_(v) {
+  var s = String(v === true ? 'да' : v === false ? 'нет' : v || '').trim().toLowerCase();
+  if (s === 'да' || s === 'true' || s === 'yes') return 'Да';
+  if (s === 'нет' || s === 'false' || s === 'no') return 'Нет';
+  return '';
 }
 
 /* ---------- Стадии (4.1) ---------- */

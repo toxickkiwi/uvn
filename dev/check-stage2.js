@@ -38,6 +38,6 @@ const card = ok(sim.ctx.getDeal('D003'));
 assert.strictEqual(card.deal.stage, 'Оплачено');
 const created = ok(sim.ctx.createDeal({ client: { name: 'Новая Клиентка', contact: 'https://vk.com/new_client' }, deal: { channel: 'ВК', request: 'Хочу на ЯБ' } }));
 assert.ok(/^D049$/.test(created.dealId) && /^C049$/.test(created.clientId), JSON.stringify(created));
-const rep = sim.ctx.getReport('2026-09-01', '2026-10-31');
-assert.strictEqual(rep.ok, false, 'менеджеру отчёт не отдаётся');
+const rep = ok(sim.ctx.getReport('2026-10-01', '2026-10-31'));
+console.log('Отчёт за октябрь:', { leads: rep.leads, newLeads: rep.newLeads, newByPotok: rep.newByPotok, repeat: rep.repeatLeads, activeDialogs: rep.activeDialogs, activeByChannel: rep.activeByChannel });
 console.log('\nВсе проверки этапа 2 пройдены');

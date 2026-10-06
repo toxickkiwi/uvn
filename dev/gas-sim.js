@@ -201,6 +201,7 @@ function create({ workbook, email = '', appUrl = 'https://script.google.com/macr
         const b = {
           requireValueInRange: (r, show) => { rule.range = r; rule.show = show; return b; },
           requireCheckbox: () => { rule.checkbox = true; return b; },
+          requireValueInList: (l, show) => { rule.list = l; rule.show = show; return b; },
           setAllowInvalid: (v) => { rule.allowInvalid = v; return b; },
           build: () => rule
         };

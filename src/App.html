@@ -166,6 +166,17 @@
     return { text: plain, html: html };
   }
 
+  /** Настройки вида (свёрнутые блоки и т. п.) — только в этом браузере, ошибки хранилища не мешают работе. */
+  function readPref(key, fallback) {
+    try {
+      var v = window.localStorage.getItem('crm.' + key);
+      return v ? Object.assign({}, fallback, JSON.parse(v)) : fallback;
+    } catch (e) { return fallback; }
+  }
+  function writePref(key, value) {
+    try { window.localStorage.setItem('crm.' + key, JSON.stringify(value)); } catch (e) { /* приватный режим */ }
+  }
+
   function copyText(text) {
     function fallback() {
       var ta = document.createElement('textarea');
@@ -197,6 +208,10 @@
     savedAt: 0,
     newLeadOpen: false,
     scopeError: '',
+    todayData: null,
+    boardData: null,
+    lastTab: 'today',
+    dealCache: {},
     todayVersion: 0
   });
 
@@ -237,10 +252,12 @@
     h = String(h || '').replace(/^#/, '');
     var m = /^deal\/([\w-]+)/.exec(h);
     if (m) return { name: 'deal', id: m[1] };
+    if (h === 'board' || h === 'report' || h === 'guide') return { name: h, id: '' };
     return { name: 'today', id: '' };
   }
   function go(hash) {
     store.route = parseHash(hash);
+    if (store.route.name !== 'deal') store.lastTab = store.route.name;
     try { google.script.history.push(null, null, hash); } catch (e) { /* локальный просмотр */ }
     window.scrollTo(0, 0);
   }
@@ -316,7 +333,14 @@
   /* ---------- Экран «Сегодня» ---------- */
   var TodayView = {
     components: { DealRow: DealRow },
-    data: function () { return { loading: true, error: '', data: null, limits: { overdue: 30, today: 30, fresh: 30 } }; },
+    data: function () {
+      return {
+        loading: !store.todayData, error: '', data: store.todayData,
+        limits: { overdue: 30, today: 30, fresh: 30 },
+        // «Просрочено» по умолчанию свёрнуто; выбор запоминается в браузере.
+        collapsed: readPref('collapsed', { overdue: true, today: false, fresh: false })
+      };
+    },
     template:
       '<div>' +
       '  <div class="page-head"><h1>Сегодня</h1><span class="muted">{{ todayLabel }}</span>' +
@@ -332,8 +356,11 @@
       '      <div class="counter"><div class="num">{{ rub(data.counters.paidSum) || "0 ₽" }}</div><div class="cap">сумма оплат</div></div>' +
       '    </div>' +
       '    <section class="block" v-for="b in blocks" :key="b.key">' +
-      '      <div class="block-head"><h2>{{ b.title }}</h2><span class="badge" :class="{red: b.key === \'overdue\' && data[b.key].length}">{{ data[b.key].length }}</span></div>' +
-      '      <div class="list">' +
+      '      <button type="button" class="block-head toggle" @click="toggle(b.key)" :aria-expanded="!collapsed[b.key]">' +
+      '        <span class="caret">{{ collapsed[b.key] ? "▸" : "▾" }}</span><h2>{{ b.title }}</h2>' +
+      '        <span class="badge" :class="{red: b.key === \'overdue\' && data[b.key].length}">{{ data[b.key].length }}</span>' +
+      '        <span v-if="collapsed[b.key] && data[b.key].length" class="faint" style="font-weight:400">— нажмите, чтобы раскрыть</span></button>' +
+      '      <div class="list" v-show="!collapsed[b.key]">' +
       '        <div v-if="!data[b.key].length" class="empty">Всё сделано</div>' +
       '        <deal-row v-for="d in data[b.key].slice(0, limits[b.key])" :key="d.id" :d="d" :late="b.key === \'overdue\'" :alert-min="alertMin"' +
       '          @open="open" @wrote="wrote" @plus="plusDay"></deal-row>' +
@@ -362,18 +389,24 @@
       }
     },
     created: function () {
-      this.load();
+      // Данные из кэша показываются сразу, свежие подгружаются в фоне.
+      this.load(!!this.data);
       var self = this;
       this._v = watch(function () { return store.todayVersion; }, function () { self.load(); });
     },
     unmounted: function () { if (this._v) this._v(); },
     methods: {
       rub: rub,
-      load: function () {
+      toggle: function (k) {
+        this.collapsed[k] = !this.collapsed[k];
+        writePref('collapsed', this.collapsed);
+      },
+      load: function (background) {
         var self = this;
-        self.loading = true;
+        if (!background) self.loading = true;
         call('getToday').then(function (data) {
           self.data = data;
+          store.todayData = data;
           self.error = '';
           self.loading = false;
         }, function (err) {
@@ -406,26 +439,43 @@
         d._busy = false;
         return d;
       },
+      /**
+       * Быстрые действия меняют экран сразу (как сделает сервер по правилу 4.2),
+       * а запрос идёт в фоне. Если сервер откажет — строка возвращается на место.
+       */
       wrote: function (d) {
         var self = this;
-        d._busy = true;
+        var s = store.boot.settings;
+        var guess = Object.assign({}, d, {
+          answered: true,
+          lastTouchAt: new Date().toISOString(),
+          stage: d.stage === 'Новое' ? 'В диалоге' : d.stage
+        });
+        if (d.stage !== 'Отложено') {
+          guess.nextTask = 'Написать повторно';
+          guess.taskAt = dayAt(Number(s.FOLLOWUP_DAYS) || 1, s.TASK_DEFAULT_TIME);
+        }
+        self.place(guess);
+        self.data.counters.touches++;
+        toast('Касание добавлено, задача: ' + fmtWhen(guess.taskAt));
         save(call('addTouch', d.id, { type: 'Написал', text: '' })).then(function (res) {
-          var nd = self.merge(d, res.deal);
-          nd.answered = true;
-          nd.lastTouchAt = res.touch.date;
-          self.data.counters.touches += res.newTouches.filter(function (t) { return t.type !== 'Смена стадии'; }).length;
+          var nd = self.merge(guess, res.deal);
           self.place(nd);
-          toast('Касание добавлено, задача: ' + fmtWhen(nd.taskAt));
-        }, function () { d._busy = false; });
+          store.todayData = self.data;
+        }, function () {
+          self.data.counters.touches--;
+          self.place(d);
+        });
       },
       plusDay: function (d) {
         var self = this;
-        d._busy = true;
         var taskAt = dayAt(1, hhmmOf(d.taskAt, store.boot.settings.TASK_DEFAULT_TIME));
+        self.place(Object.assign({}, d, { taskAt: taskAt }));
+        toast('Задача перенесена на ' + fmtWhen(taskAt));
         save(call('updateDeal', d.id, { taskAt: taskAt })).then(function (res) {
           self.place(self.merge(d, res.deal));
-          toast('Задача перенесена на ' + fmtWhen(taskAt));
-        }, function () { d._busy = false; });
+          store.todayData = self.data;
+        }, function () { self.place(d); });
       }
     }
   };
@@ -589,7 +639,7 @@
       return {
         loading: true, error: '', deal: null, client: null, touches: [], otherDeals: [],
         errField: '', clientErr: '', stageTarget: '', showTpl: false,
-        touch: { type: 'Написал', text: '' }, touchBusy: false,
+        touch: { type: 'Написал', text: '', channel: '', date: '', showDate: false }, touchBusy: false,
         edit: {},
         courseCustomForced: false
       };
@@ -600,7 +650,7 @@
       '  <div v-else-if="error" class="panel">{{ error }} <a href="#" @click.prevent="back">Вернуться</a></div>' +
       '  <template v-else-if="deal">' +
       '    <div class="deal-head">' +
-      '      <button class="btn ghost sm" @click="back">← Сегодня</button>' +
+      '      <button class="btn ghost sm" @click="back">← {{ backLabel }}</button>' +
       '      <h1>{{ client ? client.name : "Клиент не найден" }}</h1>' +
       '      <span class="stage" :class="stageClass(deal.stage)">{{ deal.stage }}</span>' +
       '      <span class="chip" :class="\'ch-\' + deal.channel">{{ deal.channel }}</span>' +
@@ -616,7 +666,8 @@
       '      <div class="panel zone-client" v-if="client">' +
       '        <h2>Клиент <span class="faint" style="font-weight:400">{{ client.id }}</span></h2>' +
       '        <div class="kv" v-for="f in clientFields" :key="f.key"><div class="label">{{ f.label }}</div>' +
-      '          <inline-field :value="client[f.key]" :error="clientErr === f.key" :type="f.type" @save="v => saveClient(f.key, v)"></inline-field>' +
+      '          <inline-field :value="client[f.key]" :error="clientErr === f.key" :type="f.type" :multiline="f.multiline" @save="v => saveClient(f.key, v)"></inline-field>' +
+      '          <div class="inline-links" v-if="f.key === \'otherLinks\' && client.otherLinks"><div v-for="u in linksOf(client.otherLinks)" :key="u"><a :href="hrefOf(u)" target="_blank" rel="noopener">{{ shortUrl(u) }} ↗</a></div></div>' +
       '          <div class="inline-links" v-if="f.key === \'nick\' && client.nick"><a :href="\'https://instagram.com/\' + client.nick" target="_blank" rel="noopener">instagram.com/{{ client.nick }} ↗</a></div>' +
       '          <div class="inline-links" v-if="f.key === \'dialogUrl\' && client.dialogUrl"><a :href="client.dialogUrl" target="_blank" rel="noopener">открыть ↗</a></div>' +
       '          <div class="inline-links" v-if="f.key === \'gcId\' && client.gcId && settings.GC_USER_URL"><a :href="fill(settings.GC_USER_URL, {id: client.gcId})" target="_blank" rel="noopener">профиль в GetCourse ↗</a></div>' +
@@ -636,11 +687,17 @@
       '        <div class="touch-form">' +
       '          <div class="seg" style="margin-bottom:8px"><button v-for="t in touchTypes" :key="t" class="btn sm" :class="{on: touch.type === t}" @click="touch.type = t"><span v-if="dirOf(t)" class="dir" :class="\'dir-\' + dirOf(t)">{{ dirOf(t) === \'in\' ? \'↓\' : \'↑\' }}</span>{{ t }}</button></div>' +
       '          <textarea class="textarea" v-model="touch.text" :placeholder="touch.type === \'Заметка менеджера\' ? \'Текст заметки\' : \'Комментарий (необязательно)\'" @keydown.ctrl.enter.prevent="addTouch" @keydown.meta.enter.prevent="addTouch"></textarea>' +
-      '          <div class="row" style="margin-top:8px"><span class="hint grow">Ctrl+Enter — добавить</span><button class="btn primary" :disabled="touchBusy" @click="addTouch">Добавить</button></div>' +
+      '          <div class="row wrap" style="margin-top:8px">' +
+      '            <label class="inline-label">Где:</label><select class="select compact" v-model="touch.channel"><option v-for="c in dicts.channels" :key="c" :value="c">{{ c }}</option></select>' +
+      '            <a href="#" v-if="!touch.showDate" @click.prevent="touch.showDate = true" class="small-link">старая переписка? указать дату</a>' +
+      '            <template v-else><label class="inline-label">Когда:</label><input class="input compact" type="datetime-local" v-model="touch.date" :max="nowInput()"><a href="#" class="small-link" @click.prevent="touch.showDate = false; touch.date = \'\'">сейчас</a></template>' +
+      '          </div>' +
+      '          <div class="hint" v-if="touch.showDate && touch.date">Старая переписка: стадия и задача не изменятся.</div>' +
+      '          <div class="row" style="margin-top:8px"><span class="hint grow hide-mobile">Ctrl+Enter — добавить</span><button class="btn primary" :disabled="touchBusy" @click="addTouch">Добавить</button></div>' +
       '        </div>' +
       '        <div v-if="!touches.length" class="muted">Касаний пока нет.</div>' +
-      '        <div v-for="(t, i) in touches" :key="i" class="feed-item" :class="{system: t.type === \'Смена стадии\'}">' +
-      '          <div class="feed-meta"><span v-if="dirOf(t.type)" class="dir-chip" :class="\'dir-\' + dirOf(t.type)">{{ dirOf(t.type) === \'in\' ? \'↓ входящее\' : \'↑ исходящее\' }}</span><b>{{ t.type }}</b><span>{{ fmtDate(t.date) }}</span><span v-if="t.authorName">{{ t.authorName }}</span></div>' +
+      '        <div v-for="(t, i) in touches" :key="i" class="feed-item" :class="{system: t.type === \'Смена стадии\', pending: t._pending}">' +
+      '          <div class="feed-meta"><span v-if="dirOf(t.type)" class="dir-chip" :class="\'dir-\' + dirOf(t.type)">{{ dirOf(t.type) === \'in\' ? \'↓ входящее\' : \'↑ исходящее\' }}</span><b>{{ t.type }}</b><span v-if="t.channel" class="chip" :class="\'ch-\' + t.channel">{{ chLabel(t.channel) }}</span><span>{{ fmtDate(t.date) }}</span><span v-if="t.authorName">{{ t.authorName }}</span><span v-if="t._pending" class="faint">сохраняю…</span></div>' +
       '          <div class="pre" v-if="t.text">{{ t.text }}</div>' +
       '        </div>' +
       '      </div>' +
@@ -675,6 +732,18 @@
       '            <div class="quick-dates"><button class="btn sm" v-for="q in quick" :key="q.n" @click="quickDate(q.n)">{{ q.label }}</button></div>' +
       '            <div class="hint warn" v-if="taskInPast">Дата задачи уже прошла.</div></div>' +
       '        </template>' +
+      '        <div class="prior-box">' +
+      '          <div class="label">Был контакт до этого обращения?</div>' +
+      '          <div class="seg"><button class="btn sm" :class="{on: deal.priorContact === \'Да\'}" @click="saveDeal(\'priorContact\', \'Да\')">Да</button>' +
+      '            <button class="btn sm" :class="{on: deal.priorContact === \'Нет\'}" @click="saveDeal(\'priorContact\', \'Нет\')">Нет, впервые</button></div>' +
+      '          <template v-if="deal.priorContact === \'Да\'">' +
+      '            <div class="row" style="align-items:flex-start;margin-top:8px">' +
+      '              <div class="field grow"><label>Где</label><select class="select" :value="deal.priorWhere" @change="saveDeal(\'priorWhere\', $event.target.value)"><option value="">—</option><option v-for="c in dicts.channels" :key="c" :value="c">{{ c }}</option></select></div>' +
+      '              <div class="field grow"><label>Когда (примерно)</label><input class="input" :class="err(\'priorWhen\')" type="date" :value="toInputDate(deal.priorWhen)" :max="nowInput().slice(0, 10)" @change="saveDeal(\'priorWhen\', $event.target.value)"></div>' +
+      '            </div>' +
+      '          </template>' +
+      '          <div class="field" style="margin-top:6px" v-if="deal.priorContact"><label>Комментарий о прошлом контакте</label><textarea class="textarea" style="min-height:44px" v-model="edit.priorNote" @blur="saveIfChanged(\'priorNote\')" placeholder="Например: весной спрашивала про ЯБ, пропала после цены"></textarea></div>' +
+      '        </div>' +
       '        <div class="big-actions">' +
       '          <button class="btn ok lg" @click="stageTarget = \'Оплачено\'" :disabled="deal.stage === \'Оплачено\'">Оплачено</button>' +
       '          <button class="btn danger lg" @click="stageTarget = \'Отказ\'" :disabled="deal.stage === \'Отказ\'">Отказ</button>' +
@@ -700,7 +769,8 @@
           { key: 'dialogUrl', label: 'Ссылка на диалог' },
           { key: 'gcId', label: 'ID GetCourse' },
           { key: 'email', label: 'Почта', type: 'email' },
-          { key: 'phone', label: 'Телефон', type: 'tel' }
+          { key: 'phone', label: 'Телефон', type: 'tel' },
+          { key: 'otherLinks', label: 'Другие ссылки (ВК, ТГ, Макс… — по одной на строку)', multiline: true }
         ];
       },
       courses: function () { return courseList(); },
@@ -716,6 +786,7 @@
         var c = String(this.edit.course || '').trim();
         return this.courseCustomForced || (c !== '' && courseList().indexOf(c) < 0);
       },
+      backLabel: function () { return { board: 'Доска', report: 'Отчёт', guide: 'Как работать' }[store.lastTab] || 'Сегодня'; },
       quick: function () { return [{ n: 0, label: 'Сегодня' }, { n: 1, label: '+1 день' }, { n: 2, label: '+2 дня' }, { n: 7, label: '+1 неделя' }]; }
     },
     watch: { id: { immediate: true, handler: function () { this.load(); } } },
@@ -726,36 +797,55 @@
       dirOf: function (type) { return touchDir(type, this.deal ? this.deal.potok : ''); },
       priceOf: function (t) { return tariffPrice(this.edit.course, t); },
       // Страница живёт в iframe Google, история браузера там ненадёжна — возвращаемся на «Сегодня».
-      back: function () { go('today'); },
+      back: function () { go(store.lastTab || 'today'); },
+      chLabel: chLabel,
+      nowInput: function () { return toInputDT(new Date().toISOString()); },
+      linksOf: function (v) { return String(v || '').split(/[\s,;]+/).filter(function (x) { return x; }); },
+      hrefOf: function (u) { return /^https?:\/\//i.test(u) ? u : 'https://' + u; },
+      shortUrl: function (u) { return String(u).replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, ''); },
       openDeal: function (id) { go('deal/' + id); },
+      /** Показываем карточку из кэша сразу (если уже открывали), свежую подгружаем в фоне. */
       load: function () {
         var self = this;
-        self.loading = true;
+        var id = this.id;
         self.showTpl = false;
-        call('getDeal', this.id).then(function (data) {
-          self.deal = data.deal;
-          self.client = data.client;
-          self.touches = data.touches;
-          self.otherDeals = data.otherDeals;
-          self.resetEdit();
-          self.error = '';
-          self.loading = false;
+        var cached = store.dealCache[id];
+        if (cached) self.show(cached);
+        else { self.loading = true; self.deal = null; }
+        call('getDeal', id).then(function (data) {
+          if (self.id !== id) return;
+          store.dealCache[id] = data;
+          self.show(data);
           document.title = (data.client ? data.client.name + ' — ' : '') + 'CRM';
         }, function (err) {
           self.error = err.error;
           self.loading = false;
         });
       },
+      show: function (data) {
+        this.deal = data.deal;
+        this.client = data.client;
+        this.touches = data.touches;
+        this.otherDeals = data.otherDeals;
+        this.resetEdit();
+        this.error = '';
+        this.loading = false;
+        if (!this.touch.channel || this.dicts.channels.indexOf(this.touch.channel) < 0) this.touch.channel = data.deal.channel;
+      },
+      remember: function () {
+        store.dealCache[this.deal.id] = { deal: this.deal, client: this.client, touches: this.touches.filter(function (t) { return !t._pending; }), otherDeals: this.otherDeals };
+      },
       resetEdit: function () {
         var d = this.deal;
-        this.edit = { request: d.request, course: d.course, tariff: d.tariff, amount: d.amount, orderNo: d.orderNo, nextTask: d.nextTask };
+        this.edit = { request: d.request, course: d.course, tariff: d.tariff, amount: d.amount, orderNo: d.orderNo, nextTask: d.nextTask, priorNote: d.priorNote };
       },
       applyResult: function (res) {
         this.deal = Object.assign({}, this.deal, res.deal);
         if (res.newTouches && res.newTouches.length) this.touches = res.newTouches.slice().reverse().concat(this.touches);
         this.resetEdit();
         this.errField = '';
-        store.todayVersion++;
+        this.remember();
+        store.todayData = null;
       },
       saveDeal: function (field, value) {
         var self = this;
@@ -825,7 +915,8 @@
         save(call('updateClient', this.client.id, patch)).then(function (c) {
           self.client = c;
           self.clientErr = '';
-          store.todayVersion++;
+          self.remember();
+          store.todayData = null;
         }, function (err) {
           self.clientErr = err.field || field;
         });
@@ -836,19 +927,38 @@
         save(call('markChecked', kind, id)).then(function () {
           if (kind === 'client') self.client = Object.assign({}, self.client, { check: '' });
           else self.deal = Object.assign({}, self.deal, { check: '' });
-          store.todayVersion++;
+          self.remember();
+          store.todayData = null;
         });
       },
+      /** Касание появляется в ленте сразу; сервер подтверждает в фоне. */
       addTouch: function () {
         var self = this;
         if (this.touchBusy) return;
+        var payload = { type: this.touch.type, text: this.touch.text, channel: this.touch.channel };
+        if (this.touch.showDate && this.touch.date) payload.date = fromInputDT(this.touch.date);
+        var pending = { type: payload.type, text: payload.text, channel: payload.channel, date: payload.date || new Date().toISOString(),
+          authorName: store.boot.user.name, _pending: true };
+        this.touches = [pending].concat(this.touches);
+        var keepText = this.touch.text;
+        this.touch.text = '';
+        this.touch.date = '';
+        this.touch.showDate = false;
         this.touchBusy = true;
-        save(call('addTouch', this.deal.id, { type: this.touch.type, text: this.touch.text })).then(function (res) {
+        save(call('addTouch', this.deal.id, payload)).then(function (res) {
           self.touchBusy = false;
-          self.touch.text = '';
+          self.touches = self.touches.filter(function (t) { return t !== pending; });
           self.applyResult(res);
-          toast('Касание добавлено');
-        }, function () { self.touchBusy = false; });
+          if (self.touches.length > 1) {
+            // Ленту держим по убыванию даты (старая переписка встаёт на своё место).
+            self.touches = self.touches.slice().sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+          }
+          self.remember();
+        }, function () {
+          self.touchBusy = false;
+          self.touches = self.touches.filter(function (t) { return t !== pending; });
+          self.touch.text = keepText;
+        });
       },
       onTemplateUsed: function (res) { this.applyResult(res); }
     }
@@ -859,7 +969,9 @@
     emits: ['close'],
     data: function () {
       return {
-        f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '', prospect: false },
+        f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '', prospect: false,
+          priorContact: '', priorWhere: '', priorWhen: '', priorNote: '' },
+        today: toInputDate(new Date().toISOString()),
         customCourse: false, dups: null, chosen: null, force: false, checking: false, busy: false, errField: '', lastChecked: ''
       };
     },
@@ -888,7 +1000,19 @@
       '          <button class="btn sm" @click="force = true">Это другой человек</button>' +
       '        </div>' +
       '        <div class="field"><label>Имя</label><input class="input" :class="{\'has-error\': errField===\'name\'}" v-model="f.name"></div>' +
+      '        <div class="field prior-box" :class="{\'has-error\': errField===\'priorContact\'}"><label>Был контакт с этим человеком раньше (до CRM)?</label>' +
+      '          <div class="seg"><button type="button" class="btn sm" :class="{on: f.priorContact === \'Нет\'}" @click="f.priorContact = \'Нет\'">Нет, впервые</button>' +
+      '            <button type="button" class="btn sm" :class="{on: f.priorContact === \'Да\'}" @click="f.priorContact = \'Да\'">Да, общались</button></div>' +
+      '          <template v-if="f.priorContact === \'Да\'">' +
+      '            <div class="row" style="align-items:flex-start;margin-top:8px">' +
+      '              <div class="field grow"><label>Где</label><select class="select" v-model="f.priorWhere"><option value="">—</option><option v-for="c in dicts.channels" :key="c" :value="c">{{ c }}</option></select></div>' +
+      '              <div class="field grow"><label>Когда (примерно)</label><input class="input" type="date" v-model="f.priorWhen" :max="today"></div>' +
+      '            </div>' +
+      '            <input class="input" v-model="f.priorNote" placeholder="Комментарий: о чём говорили, чем закончилось">' +
+      '          </template>' +
+      '        </div>' +
       '      </template>' +
+      '      <div v-if="chosen" class="hint">Клиент уже есть в CRM — «был контакт: да» отметится сам, с каналом и датой прошлой сделки.</div>' +
       '      <div class="field"><label>{{ outgoing ? "О чём написали клиенту" : "Запрос клиента" }}</label><textarea class="textarea" :class="{\'has-error\': errField===\'request\'}" v-model="f.request" :placeholder="(outgoing ? \'Что предложили клиенту\' : \'Что спрашивает клиент\') + \'. Enter — сохранить, Shift+Enter — новая строка\'"></textarea></div>' +
       '      <div class="row" style="align-items:flex-start">' +
       '        <div class="field grow"><label>Курс</label>' +
@@ -948,8 +1072,10 @@
         if (this.busy) return;
         this.errField = '';
         if (!this.f.channel) { this.errField = 'channel'; toast('Выберите канал', true); return; }
+        if (!this.chosen && !this.f.priorContact) { this.errField = 'priorContact'; toast('Отметьте, был ли контакт с человеком раньше', true); return; }
         var payload = {
-          deal: { channel: this.f.channel, potok: this.f.potok, request: this.f.request, course: this.f.course, tariff: this.f.tariff, prospect: this.f.prospect },
+          deal: { channel: this.f.channel, potok: this.f.potok, request: this.f.request, course: this.f.course, tariff: this.f.tariff, prospect: this.f.prospect,
+            priorContact: this.chosen ? '' : this.f.priorContact, priorWhere: this.f.priorWhere, priorWhen: this.f.priorWhen, priorNote: this.f.priorNote },
           force: this.force
         };
         if (this.chosen) payload.clientId = this.chosen.id;
@@ -964,6 +1090,7 @@
           }
           toast('Обращение ' + res.dealId + ' создано');
           store.todayVersion++;
+          store.todayData = null;
           self.$emit('close');
           go('deal/' + res.dealId);
         }, function (err) {
@@ -1021,9 +1148,404 @@
     }
   };
 
+  /* ---------- Доска (канбан) ---------- */
+  var OPEN_STAGES = ['Новое', 'В диалоге', 'Курс подобран', 'Заказ создан', 'Отложено'];
+
+  var BoardCard = {
+    props: ['d'],
+    template:
+      '<div class="bcard" :class="\'c-\' + (d.color || \'white\')" :data-id="d.id" @click="open">' +
+      '  <div class="row"><b class="grow ellipsis">{{ d.clientName || "Без имени" }}</b>' +
+      '    <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
+      '    <span class="chip" :class="\'ch-\' + d.channel">{{ chLabel(d.channel) }}</span></div>' +
+      '  <div class="muted small" v-if="d.course || d.amount">{{ d.course }}<span v-if="d.amount"> · {{ rub(d.amount) }}</span></div>' +
+      '  <div class="small"><span :class="{late: late}">{{ d.taskAt ? fmtWhen(d.taskAt) : "нет задачи" }}</span><span class="faint" v-if="d.nextTask"> · {{ d.nextTask }}</span></div>' +
+      '</div>',
+    computed: {
+      late: function () { return !this.d.taskAt || new Date(this.d.taskAt).getTime() < dayStart(nowMs(), 0); }
+    },
+    methods: {
+      chLabel: chLabel, rub: rub, fmtWhen: fmtWhen,
+      open: function () { go('deal/' + this.d.id); }
+    }
+  };
+
+  var BoardView = {
+    components: { BoardCard: BoardCard, StageModal: StageModal },
+    data: function () {
+      return {
+        loading: !store.boardData, error: '', data: store.boardData,
+        f: readPref('boardFilter', { potok: '', channel: '', course: '', q: '' }),
+        mobileStage: 'Новое', closedOpen: { 'Оплачено': false, 'Отказ': false },
+        modal: null, narrow: window.innerWidth < 768
+      };
+    },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Доска</h1><span class="muted" v-if="data">открытых сделок: {{ openAll.length }}</span>' +
+      '    <button class="btn ghost sm" style="margin-left:auto" @click="load(false)" :disabled="loading">Обновить</button></div>' +
+      '  <div class="filters">' +
+      '    <select class="select compact" v-model="f.potok"><option value="">Все потоки</option><option v-for="p in dicts.potoki" :key="p">{{ p }}</option></select>' +
+      '    <select class="select compact" v-model="f.channel"><option value="">Все каналы</option><option v-for="c in dicts.channels" :key="c">{{ c }}</option></select>' +
+      '    <select class="select compact" v-model="f.course"><option value="">Все курсы</option><option v-for="c in courses" :key="c">{{ c }}</option></select>' +
+      '    <input class="input compact grow" v-model="f.q" placeholder="Имя, ник, ID">' +
+      '    <button class="btn ghost sm" v-if="f.potok || f.channel || f.course || f.q" @click="f = {potok: \'\', channel: \'\', course: \'\', q: \'\'}">Сбросить</button>' +
+      '  </div>' +
+      '  <div v-if="loading && !data" class="loading">Загружаю доску…</div>' +
+      '  <div v-else-if="error" class="panel">{{ error }}</div>' +
+      '  <template v-else-if="data">' +
+      '    <template v-if="narrow">' +
+      '      <div class="stage-tabs"><button v-for="s in stagesAll" :key="s" class="btn sm" :class="{on: mobileStage === s}" @click="mobileStage = s">{{ s }} <span class="badge">{{ col(s).length }}</span></button></div>' +
+      '      <div class="list"><div v-if="!col(mobileStage).length" class="empty">Пусто</div>' +
+      '        <board-card v-for="d in col(mobileStage)" :key="d.id" :d="d"></board-card></div>' +
+      '      <div class="hint" style="margin-top:8px">Стадию меняйте в карточке сделки. «Оплачено» и «Отказ» — за {{ periodLabel }}.</div>' +
+      '    </template>' +
+      '    <div v-else class="board">' +
+      '      <div v-for="s in openStages" :key="s" class="bcol">' +
+      '        <div class="bcol-head"><span class="stage" :class="stageClass(s)">{{ s }}</span><span class="badge">{{ col(s).length }}</span>' +
+      '          <span class="faint small grow" style="text-align:right" v-if="sum(s)">{{ rub(sum(s)) }}</span></div>' +
+      '        <div class="bcol-body" :data-stage="s" :ref="\'col-\' + s"><board-card v-for="d in col(s)" :key="d.id" :d="d"></board-card></div>' +
+      '      </div>' +
+      '      <div v-for="s in [\'Оплачено\', \'Отказ\']" :key="s" class="bcol closed" :class="{expanded: closedOpen[s]}">' +
+      '        <button type="button" class="bcol-head closed-head" @click="closedOpen[s] = !closedOpen[s]" :title="\'За \' + periodLabel">' +
+      '          <span class="stage" :class="stageClass(s)">{{ s }}</span><span class="badge">{{ col(s).length }}</span></button>' +
+      '        <div class="bcol-body" :data-stage="s" :ref="\'col-\' + s"><template v-if="closedOpen[s]"><board-card v-for="d in col(s)" :key="d.id" :d="d"></board-card></template>' +
+      '          <div v-else class="drop-hint">перетащите сюда</div></div>' +
+      '      </div>' +
+      '    </div>' +
+      '  </template>' +
+      '  <stage-modal v-if="modal" :deal="modal.deal" :stage="modal.stage" @cancel="modal = null" @done="onModalDone"></stage-modal>' +
+      '</div>',
+    computed: {
+      dicts: function () { return store.boot.dicts; },
+      courses: function () { return courseList(); },
+      openStages: function () { return store.boot.dicts.stages.filter(function (s) { return OPEN_STAGES.indexOf(s) >= 0; }); },
+      stagesAll: function () { return this.openStages.concat(['Оплачено', 'Отказ']); },
+      periodLabel: function () {
+        var d = new Date();
+        return d.toLocaleDateString('ru-RU', { month: 'long', timeZone: 'Europe/Moscow' });
+      },
+      filtered: function () {
+        var f = this.f;
+        var q = String(f.q || '').trim().toLowerCase();
+        var ok = function (d) {
+          if (f.potok && d.potok !== f.potok) return false;
+          if (f.channel && d.channel !== f.channel) return false;
+          if (f.course && String(d.course || '').indexOf(f.course) < 0) return false;
+          if (q && (d.clientName + ' ' + d.nick + ' ' + d.id).toLowerCase().indexOf(q) < 0) return false;
+          return true;
+        };
+        if (!this.data) return { open: [], paid: [], lost: [] };
+        return { open: this.data.open.filter(ok), paid: this.data.paid.filter(ok), lost: this.data.lost.filter(ok) };
+      },
+      openAll: function () { return this.filtered.open; }
+    },
+    watch: { f: { deep: true, handler: function (v) { writePref('boardFilter', v); } } },
+    created: function () { this.load(!!this.data); },
+    mounted: function () {
+      var self = this;
+      nextTick(function () { self.initSortable(); });
+      this._resize = function () { self.narrow = window.innerWidth < 768; };
+      window.addEventListener('resize', this._resize);
+    },
+    updated: function () { this.initSortable(); },
+    unmounted: function () {
+      window.removeEventListener('resize', this._resize);
+      (this._sortables || []).forEach(function (x) { x.destroy(); });
+    },
+    methods: {
+      stageClass: stageClass, rub: rub,
+      col: function (s) {
+        if (s === 'Оплачено') return this.filtered.paid;
+        if (s === 'Отказ') return this.filtered.lost;
+        return this.filtered.open.filter(function (d) { return d.stage === s; });
+      },
+      sum: function (s) { return this.col(s).reduce(function (a, d) { return a + (Number(d.amount) || 0); }, 0); },
+      load: function (background) {
+        var self = this;
+        if (!background) self.loading = true;
+        call('getBoard', {}).then(function (data) {
+          self.data = data;
+          store.boardData = data;
+          self.loading = false;
+          self.error = '';
+        }, function (err) { self.error = err.error; self.loading = false; });
+      },
+      /** SortableJS двигает элементы сам; мы сразу возвращаем DOM как был и меняем данные — Vue перерисует. */
+      initSortable: function () {
+        var self = this;
+        if (!window.Sortable || this.narrow || !this.data) return;
+        var els = this.stagesAll.map(function (s) { var r = self.$refs['col-' + s]; return Array.isArray(r) ? r[0] : r; }).filter(Boolean);
+        if (this._sortEls && this._sortEls.length === els.length && this._sortEls.every(function (e, i) { return e === els[i]; })) return;
+        (this._sortables || []).forEach(function (x) { x.destroy(); });
+        this._sortEls = els;
+        this._sortables = els.map(function (el) {
+          return window.Sortable.create(el, {
+            group: 'deals', animation: 120, draggable: '.bcard', ghostClass: 'bcard-ghost', delay: 120, delayOnTouchOnly: true,
+            onStart: function (evt) { self._dragNext = evt.item.nextSibling; },
+            onEnd: function (evt) {
+              var item = evt.item;
+              var from = evt.from;
+              var target = evt.to.getAttribute('data-stage');
+              from.insertBefore(item, self._dragNext && self._dragNext.parentNode === from ? self._dragNext : null);
+              var id = item.getAttribute('data-id');
+              var deal = self.data.open.concat(self.data.paid, self.data.lost).filter(function (d) { return d.id === id; })[0];
+              if (!deal || !target || target === deal.stage) return;
+              self.moveTo(deal, target);
+            }
+          });
+        });
+      },
+      moveTo: function (deal, target) {
+        var needsModal = target === 'Оплачено' || target === 'Отказ' || target === 'Отложено' || !deal.taskAt;
+        if (needsModal) { this.modal = { deal: deal, stage: target }; return; }
+        var self = this;
+        var before = Object.assign({}, deal);
+        self.replace(Object.assign({}, deal, { stage: target }));
+        save(call('updateDeal', deal.id, { stage: target })).then(function (res) {
+          self.replace(Object.assign({}, deal, res.deal, { stage: res.deal.stage }));
+          delete store.dealCache[deal.id];
+          store.todayData = null;
+        }, function () { self.replace(before); });
+      },
+      onModalDone: function (res) {
+        var deal = this.modal.deal;
+        this.modal = null;
+        this.replace(Object.assign({}, deal, res.deal));
+        delete store.dealCache[deal.id];
+        store.todayData = null;
+        toast('Стадия: ' + res.deal.stage);
+      },
+      /** Кладёт сделку в нужный список по её стадии. */
+      replace: function (d) {
+        var id = d.id;
+        var drop = function (list) { return list.filter(function (x) { return x.id !== id; }); };
+        var data = { open: drop(this.data.open), paid: drop(this.data.paid), lost: drop(this.data.lost), from: this.data.from, to: this.data.to };
+        if (OPEN_STAGES.indexOf(d.stage) >= 0) data.open.push(d);
+        else if (d.stage === 'Оплачено') data.paid.unshift(d);
+        else if (d.stage === 'Отказ') data.lost.unshift(d);
+        data.open.sort(function (a, b) { return (a.taskAt || '9').localeCompare(b.taskAt || '9'); });
+        this.data = data;
+        store.boardData = data;
+      }
+    }
+  };
+
+  /* ---------- Отчёт ---------- */
+  function isoDay(ms) { var p = msk(new Date(ms).toISOString()); return p.y + '-' + pad(p.m) + '-' + pad(p.d); }
+  function periodRange(kind) {
+    var now = nowMs();
+    var p = msk(new Date(now).toISOString());
+    var monthStart = Date.UTC(p.y, p.m - 1, 1) - MSK;
+    var dow = (new Date(dayStart(now, 0) + MSK).getUTCDay() + 6) % 7; // 0 = понедельник
+    var weekStart = dayStart(now, -dow);
+    if (kind === 'prevMonth') {
+      var prevStart = Date.UTC(p.y, p.m - 2, 1) - MSK;
+      return { from: isoDay(prevStart), to: isoDay(monthStart - DAY) };
+    }
+    if (kind === 'week') return { from: isoDay(weekStart), to: isoDay(now) };
+    if (kind === 'prevWeek') return { from: isoDay(weekStart - 7 * DAY), to: isoDay(weekStart - DAY) };
+    return { from: isoDay(monthStart), to: isoDay(now) };
+  }
+
+  var BarList = {
+    props: ['rows', 'unit'],
+    template:
+      '<div class="bars">' +
+      '  <div v-if="!rows.length" class="muted">Нет данных</div>' +
+      '  <div v-for="r in rows" :key="r.label" class="bar-row">' +
+      '    <span class="bar-label">{{ r.label }}</span>' +
+      '    <span class="bar-track"><span class="bar-fill" :style="{width: (max ? r.value / max * 100 : 0) + \'%\'}"></span></span>' +
+      '    <span class="bar-val">{{ r.value }}<span class="faint" v-if="total && rows.length > 1"> · {{ Math.round(r.value / total * 100) }}%</span></span>' +
+      '  </div>' +
+      '</div>',
+    computed: {
+      max: function () { return this.rows.reduce(function (m, r) { return Math.max(m, r.value); }, 0); },
+      total: function () { return this.rows.reduce(function (s, r) { return s + r.value; }, 0); }
+    }
+  };
+
+  function toRows(obj, order) {
+    var keys = Object.keys(obj || {});
+    if (order) keys.sort(function (a, b) { var ia = order.indexOf(a), ib = order.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
+    else keys.sort(function (a, b) { return obj[b] - obj[a]; });
+    return keys.map(function (k) { return { label: k, value: obj[k] }; });
+  }
+
+  var ReportView = {
+    components: { BarList: BarList },
+    data: function () {
+      var r = periodRange('month');
+      return { kind: 'month', from: r.from, to: r.to, loading: false, error: '', r: null };
+    },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Отчёт</h1><span class="muted" v-if="r">{{ fmtDate(r.from, false) }} — {{ fmtDate(r.to, false) }}</span></div>' +
+      '  <div class="filters">' +
+      '    <button v-for="p in periods" :key="p.k" class="btn sm" :class="{on: kind === p.k}" @click="setKind(p.k)">{{ p.t }}</button>' +
+      '    <template v-if="kind === \'custom\'"><input class="input compact" type="date" v-model="from" @change="load"><span>—</span><input class="input compact" type="date" v-model="to" @change="load"></template>' +
+      '    <button class="btn ghost sm" style="margin-left:auto" @click="copy" :disabled="!r">Скопировать как таблицу</button>' +
+      '  </div>' +
+      '  <div v-if="loading && !r" class="loading">Считаю…</div>' +
+      '  <div v-else-if="error" class="panel">{{ error }}</div>' +
+      '  <template v-else-if="r">' +
+      '    <div class="kpis" :class="{dim: loading}">' +
+      '      <div class="kpi"><div class="num">{{ r.leads }}</div><div class="cap">обращений за период</div><div class="sub">новых {{ r.newLeads }} · повторных {{ r.repeatLeads }}</div></div>' +
+      '      <div class="kpi"><div class="num">{{ r.newByPotok["Входящее"] || 0 }} / {{ r.newByPotok["Исходящее"] || 0 }}</div><div class="cap">новые: входящие / исходящие</div><div class="sub">люди, с кем раньше не общались</div></div>' +
+      '      <div class="kpi"><div class="num">{{ r.activeDialogs }}</div><div class="cap">активных диалогов</div><div class="sub">была переписка за период</div></div>' +
+      '      <div class="kpi"><div class="num">{{ pct(r.conversion) }}</div><div class="cap">конверсия в оплату</div><div class="sub">из обращений периода оплачено {{ r.paidFromLeads }}</div></div>' +
+      '      <div class="kpi"><div class="num">{{ rub(r.revenue) || "0 ₽" }}</div><div class="cap">выручка</div><div class="sub">по дате оплаты · оплат {{ r.paidCount }}</div></div>' +
+      '    </div>' +
+      '    <div class="rgrid">' +
+      '      <section class="panel"><h2>Диалоги по каналам</h2>' +
+      '        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Канал</th><th>Новые<span class="hide-mobile"> обращения</span></th><th>Все<span class="hide-mobile"> обращения</span></th><th>Активные диалоги</th></tr></thead>' +
+      '          <tbody><tr v-for="c in channelRows" :key="c.ch"><td><span class="chip" :class="\'ch-\' + c.ch">{{ c.ch }}</span></td><td>{{ c.n }}</td><td>{{ c.l }}</td><td>{{ c.a }}</td></tr></tbody>' +
+      '          <tfoot><tr><td>Итого</td><td>{{ r.newLeads }}</td><td>{{ r.leads }}</td><td>{{ r.activeDialogs }}</td></tr></tfoot></table></div>' +
+      '        <p class="hint">«Новые» — раньше не общались. «Активные диалоги» — была хоть одна запись в истории за период, в том числе со старыми клиентами; если человек писал в двух каналах, он учтён в обоих.</p></section>' +
+      '      <section class="panel"><h2>Новые обращения: входящие и исходящие</h2><bar-list :rows="toRows(r.newByPotok, dicts.potoki)"></bar-list>' +
+      '        <h2 style="margin-top:16px">Был контакт до CRM</h2><bar-list :rows="toRows(r.priorContact, [\'Нет\', \'Да\', \'Не отмечено\'])"></bar-list></section>' +
+      '      <section class="panel"><h2>Обращения по каналам</h2><bar-list :rows="toRows(r.byChannel, dicts.channels)"></bar-list></section>' +
+      '      <section class="panel"><h2>Стадии сделок периода сейчас</h2><bar-list :rows="toRows(r.funnel, dicts.stages)"></bar-list></section>' +
+      '      <section class="panel"><h2>Оплаты по курсам</h2>' +
+      '        <table class="tbl" v-if="courseRows.length"><thead><tr><th>Курс</th><th>Оплат</th><th>Выручка</th></tr></thead>' +
+      '          <tbody><tr v-for="c in courseRows" :key="c.k"><td>{{ c.k }}</td><td>{{ c.count }}</td><td>{{ rub(c.revenue) }}</td></tr></tbody></table>' +
+      '        <div v-else class="muted">Оплат за период нет</div></section>' +
+      '      <section class="panel"><h2>Причины отказов</h2><bar-list :rows="toRows(r.lostReasons)"></bar-list></section>' +
+      '    </div>' +
+      '  </template>' +
+      '</div>',
+    computed: {
+      dicts: function () { return store.boot.dicts; },
+      periods: function () {
+        return [{ k: 'month', t: 'Этот месяц' }, { k: 'prevMonth', t: 'Прошлый месяц' }, { k: 'week', t: 'Эта неделя' }, { k: 'prevWeek', t: 'Прошлая неделя' }, { k: 'custom', t: 'Свой период' }];
+      },
+      channelRows: function () {
+        var r = this.r;
+        var chs = store.boot.dicts.channels.slice();
+        [r.byChannel, r.activeByChannel, r.newByChannel].forEach(function (o) { Object.keys(o || {}).forEach(function (k) { if (chs.indexOf(k) < 0) chs.push(k); }); });
+        return chs.map(function (ch) { return { ch: ch, n: r.newByChannel[ch] || 0, l: r.byChannel[ch] || 0, a: r.activeByChannel[ch] || 0 }; })
+          .filter(function (x) { return x.n || x.l || x.a; });
+      },
+      courseRows: function () {
+        var bc = this.r.byCourse || {};
+        return Object.keys(bc).map(function (k) { return { k: k, count: bc[k].count, revenue: bc[k].revenue }; }).sort(function (a, b) { return b.revenue - a.revenue; });
+      }
+    },
+    created: function () { this.load(); },
+    methods: {
+      fmtDate: fmtDate, rub: rub, toRows: toRows,
+      pct: function (v) { return Math.round((v || 0) * 100) + '%'; },
+      setKind: function (k) {
+        this.kind = k;
+        if (k !== 'custom') { var r = periodRange(k); this.from = r.from; this.to = r.to; this.load(); }
+      },
+      load: function () {
+        var self = this;
+        if (!this.from || !this.to) return;
+        self.loading = true;
+        call('getReport', this.from, this.to).then(function (r) { self.r = r; self.loading = false; self.error = ''; },
+          function (err) { self.error = err.error; self.loading = false; });
+      },
+      copy: function () {
+        var r = this.r;
+        var lines = [['Период', this.from + ' — ' + this.to], ['Обращений', r.leads], ['Новых', r.newLeads], ['Повторных', r.repeatLeads],
+          ['Новых входящих', r.newByPotok['Входящее'] || 0], ['Новых исходящих', r.newByPotok['Исходящее'] || 0],
+          ['Активных диалогов', r.activeDialogs], ['Конверсия', this.pct(r.conversion)], ['Выручка, ₽', r.revenue], [''],
+          ['Канал', 'Новые обращения', 'Все обращения', 'Активные диалоги']];
+        this.channelRows.forEach(function (c) { lines.push([c.ch, c.n, c.l, c.a]); });
+        copyText(lines.map(function (l) { return l.join('\t'); }).join('\n')).then(function () { toast('Скопировано — вставьте в таблицу'); },
+          function () { toast('Браузер не дал скопировать', true); });
+      }
+    }
+  };
+
+  /* ---------- Как работать (интерактивная схема) ---------- */
+  var GUIDE_TREE = {
+    start: { q: 'Пришло сообщение. Человек уже есть в CRM?', hint: 'Нажмите / и найдите по имени, нику, телефону.', opts: [
+      { t: 'Да, нашёлся', next: 'known' }, { t: 'Нет, не нашёлся', next: 'newLead' }] },
+    known: { q: 'Это продолжение открытой сделки?', hint: 'В карточке справа видна стадия. Открытые: Новое, В диалоге, Курс подобран, Заказ создан, Отложено.', opts: [
+      { t: 'Да, сделка открыта', next: 'reply' }, { t: 'Нет, сделка закрыта или новый запрос', next: 'repeatLead' }] },
+    repeatLead: { a: true, title: 'Новое обращение старого клиента', steps: [
+      'Нажмите «+ Обращение», вставьте контакт.', 'Внизу появится «Похоже, клиент уже есть» — нажмите «Это он».',
+      '«Был контакт» отметится сам. Напишите запрос и сохраните.'], next: 'reply' },
+    newLead: { q: 'Кто написал первым?', opts: [
+      { t: 'Клиент написал нам', next: 'newIn' }, { t: 'Мы написали первыми', next: 'newOut' }] },
+    newIn: { a: true, title: 'Завести обращение: Входящее', steps: [
+      '«+ Обращение» (или клавиша N) → канал, поток «Входящее».', 'Контакт: ник, ссылка, почта или телефон.',
+      'Был контакт раньше? Если общались до CRM — «Да», где и когда примерно.', 'Запрос клиента своими словами → Сохранить.'], next: 'reply' },
+    newOut: { a: true, title: 'Завести обращение: Исходящее', steps: [
+      '«+ Обращение» → канал, поток «Исходящее».', 'Контакт и имя.', 'Был контакт раньше? Отметьте честно.',
+      '«О чём написали клиенту» → Сохранить. Задача «Написать повторно» встанет на завтра сама.'], next: 'reply' },
+    reply: { a: true, title: 'Ответить и отметить', steps: [
+      'Откройте карточку → «Открыть диалог ↗».', 'Ответ из шаблона: «Шаблоны» → выберите → «Скопировать». Касание запишется само.',
+      'Написали своими словами — в истории выберите «↑ Написал», канал и нажмите «Добавить».',
+      'Клиент ответил — «↓ Клиент ответил». Старую переписку можно внести с датой: «старая переписка? указать дату».'], next: 'status' },
+    status: { q: 'Что сейчас с клиентом?', opts: [
+      { t: 'Подбираем курс', next: 'sPicked' }, { t: 'Заказ создан, ждём оплату', next: 'sOrder' },
+      { t: 'Видна оплата, работаем плотно', next: 'sHot' }, { t: 'Просит вернуться позже', next: 'sLater' },
+      { t: 'Оплатил', next: 'sPaid' }, { t: 'Отказался или пропал', next: 'sLost' }] },
+    sPicked: { a: true, title: 'Курс подобран', steps: ['Стадия «Курс подобран», выберите курс и тариф — сумма подставится.', 'Поставьте задачу с датой: когда написать снова.'] },
+    sOrder: { a: true, title: 'Заказ создан', steps: ['Стадия «Заказ создан», номер заказа GetCourse.', 'Задача «проверить оплату» на завтра.'] },
+    sHot: { a: true, title: 'Перспектива оплаты', steps: ['Нажмите «☆ Перспектива оплаты» — строка станет жёлтой.', 'Держите задачу на ближайшие дни.'] },
+    sLater: { a: true, title: 'Отложено', steps: ['Стадия «Отложено» и дата, когда вернуться (не раньше завтра).', 'В этот день сделка сама появится в «На сегодня».'] },
+    sPaid: { a: true, title: 'Оплачено', steps: ['Кнопка «Оплачено»: сумма, способ оплаты, дата.', 'Строка станет зелёной, сумма попадёт в «Итого за месяц».'] },
+    sLost: { a: true, title: 'Отказ', steps: ['Кнопка «Отказ» и причина. Не отвечает после нескольких напоминаний — «Не отвечает».', 'Ошибочную сделку не удаляем: «Отказ» с причиной «Другое».'] }
+  };
+
+  var GuideView = {
+    data: function () { return { path: ['start'] }; },
+    template:
+      '<div class="guide">' +
+      '  <div class="page-head"><h1>Как работать</h1><span class="muted">порядок дня и что делать с каждым сообщением</span></div>' +
+      '  <section class="panel"><h2>Распорядок дня</h2>' +
+      '    <ol class="timeline">' +
+      '      <li v-for="(s, i) in day" :key="i"><div class="tl-time">{{ s.time }}</div><div class="tl-body"><b>{{ s.title }}</b><div class="muted">{{ s.text }}</div></div></li>' +
+      '    </ol></section>' +
+      '  <section class="panel"><div class="row"><h2 class="grow" style="margin:0">Пришло сообщение — что делать</h2>' +
+      '    <button class="btn ghost sm" v-if="path.length > 1" @click="path = [\'start\']">Начать сначала</button></div>' +
+      '    <p class="muted" style="margin:6px 0 12px">Отвечайте на вопросы — схема покажет шаги.</p>' +
+      '    <div class="flow">' +
+      '      <div v-for="(id, i) in path" :key="id + i" class="flow-node" :class="{answer: node(id).a, past: i < path.length - 1}">' +
+      '        <template v-if="node(id).a"><div class="flow-title">✓ {{ node(id).title }}</div><ol class="flow-steps"><li v-for="(st, j) in node(id).steps" :key="j">{{ st }}</li></ol>' +
+      '          <button v-if="node(id).next && i === path.length - 1" class="btn primary sm" @click="pick(i, node(id).next)">Дальше →</button></template>' +
+      '        <template v-else><div class="flow-q">{{ node(id).q }}</div><div class="hint" v-if="node(id).hint">{{ node(id).hint }}</div>' +
+      '          <div class="seg" style="margin-top:8px"><button v-for="o in node(id).opts" :key="o.next" class="btn sm" :class="{on: path[i + 1] === o.next}" @click="pick(i, o.next)">{{ o.t }}</button></div></template>' +
+      '      </div>' +
+      '    </div></section>' +
+      '  <section class="panel"><h2>Главные правила</h2><ul class="rules">' +
+      '    <li v-for="(r, i) in rules" :key="i">{{ r }}</li></ul></section>' +
+      '</div>',
+    computed: {
+      day: function () {
+        return [
+          { time: 'Утро', title: 'Открыть «Сегодня»', text: 'Сначала «Без ответа» — новые обращения, им отвечаем первыми (красная полоска — ждут дольше 10 минут).' },
+          { time: 'Утро', title: '«На сегодня»', text: 'Написать каждому. Нажать «Написал» — задача сама перенесётся на завтра. Нужна другая дата — поставьте в карточке.' },
+          { time: 'Днём', title: 'Новые сообщения', text: 'Каждое — по схеме ниже. Новый человек — сразу «+ Обращение», чтобы ничего не потерялось.' },
+          { time: 'Днём', title: '«Просрочено»', text: 'Разобрать: написать, перенести («+1 день»), отложить или закрыть «Отказом».' },
+          { time: 'Вечер', title: 'Проверка', text: 'В «Без ответа» и «Просрочено» пусто. У каждой открытой сделки есть задача с датой.' }
+        ];
+      },
+      rules: function () {
+        return [
+          'У каждой открытой сделки всегда есть следующая задача с датой.',
+          'Каждое сообщение отмечаем в истории: «↑ Написал» или «↓ Клиент ответил», с каналом, где шла переписка.',
+          'Новый клиент — всегда через «+ Обращение»; если CRM нашла похожего — проверьте, не он ли это.',
+          'Старые переписки вносим с датой («старая переписка? указать дату») и отмечаем «Был контакт: да».',
+          'Ничего не удаляем. Ошибочную сделку закрываем «Отказом» с причиной «Другое».',
+          'Жёлтый — есть перспектива оплаты, зелёный — оплачено, белый — пока без перспектив.'
+        ];
+      }
+    },
+    methods: {
+      node: function (id) { return GUIDE_TREE[id]; },
+      pick: function (i, next) { this.path = this.path.slice(0, i + 1).concat([next]); }
+    }
+  };
+
   /* ---------- Корень ---------- */
   var Root = {
-    components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox },
+    components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox,
+      BoardView: BoardView, ReportView: ReportView, GuideView: GuideView },
     template:
       '<div v-if="!store.boot" class="loading">{{ store.bootError || "Загрузка…" }}</div>' +
       '<template v-else>' +
@@ -1040,14 +1562,27 @@
       '  <main class="main">' +
       '    <today-view v-if="store.route.name === \'today\'"></today-view>' +
       '    <deal-view v-else-if="store.route.name === \'deal\'" :id="store.route.id"></deal-view>' +
+      '    <board-view v-else-if="store.route.name === \'board\'"></board-view>' +
+      '    <report-view v-else-if="store.route.name === \'report\'"></report-view>' +
+      '    <guide-view v-else-if="store.route.name === \'guide\'"></guide-view>' +
       '  </main>' +
+      '  <nav class="bottom-nav">' +
+      '    <a v-for="t in tabs.slice(0, 2)" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.title }}</a>' +
+      '    <button class="bn-add" @click="store.newLeadOpen = true" aria-label="Новое обращение">+</button>' +
+      '    <a v-for="t in tabs.slice(2)" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.short || t.title }}</a>' +
+      '  </nav>' +
       '  <new-lead-modal v-if="store.newLeadOpen" @close="store.newLeadOpen = false"></new-lead-modal>' +
       '</template>' +
       '<div class="toasts"><div v-for="t in store.toasts" :key="t.id" class="toast" :class="{error: t.error}">{{ t.text }}</div></div>',
     data: function () { return { store: store, tick: 0 }; },
     computed: {
       tabs: function () {
-        return [{ name: 'today', hash: 'today', title: 'Сегодня' }];
+        return [
+          { name: 'today', hash: 'today', title: 'Сегодня', ico: '☀' },
+          { name: 'board', hash: 'board', title: 'Доска', ico: '▦' },
+          { name: 'report', hash: 'report', title: 'Отчёт', ico: '▤' },
+          { name: 'guide', hash: 'guide', title: 'Как работать', short: 'Помощь', ico: '?' }
+        ];
       },
       saveState: function () {
         this.tick; // пересчёт по таймеру
@@ -1080,11 +1615,16 @@
 
   try {
     google.script.history.setChangeHandler(function (e) { store.route = parseHash(e.location.hash); });
-    google.script.url.getLocation(function (loc) { store.route = parseHash(loc.hash); });
+    google.script.url.getLocation(function (loc) {
+      store.route = parseHash(loc.hash);
+      if (store.route.name !== 'deal') store.lastTab = store.route.name;
+    });
   } catch (e) { /* локальный просмотр */ }
 
-  call('getBootstrap').then(function (data) {
-    store.boot = data;
+  // Первая загрузка — один запрос: настройки и экран «Сегодня» вместе.
+  call('getStart').then(function (data) {
+    store.todayData = data.today;
+    store.boot = data.boot;
   }, function (err) {
     store.bootError = err.error;
   });

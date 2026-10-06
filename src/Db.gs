@@ -29,7 +29,8 @@ SCHEMA[SHEET.CLIENTS] = {
   phone: 'Телефон',
   check: 'Проверить',
   createdAt: 'Создан',
-  author: 'Автор'
+  author: 'Автор',
+  otherLinks: 'Другие ссылки'
 };
 SCHEMA[SHEET.DEALS] = {
   id: 'ID',
@@ -52,14 +53,19 @@ SCHEMA[SHEET.DEALS] = {
   check: 'Проверить',
   owner: 'Ответственный',
   updatedAt: 'Изменено',
-  prospect: 'Перспектива'
+  prospect: 'Перспектива',
+  priorContact: 'Был контакт',
+  priorWhere: 'Где был контакт',
+  priorWhen: 'Когда был контакт',
+  priorNote: 'Комментарий о контакте'
 };
 SCHEMA[SHEET.TOUCHES] = {
   dealId: 'ID сделки',
   date: 'Дата',
   type: 'Тип',
   text: 'Текст',
-  author: 'Автор'
+  author: 'Автор',
+  channel: 'Канал'
 };
 SCHEMA[SHEET.TARIFFS] = {
   course: 'Курс',
@@ -98,7 +104,10 @@ SCHEMA[SHEET.SETTINGS] = {
  * Колонки, добавленные после запуска. Пока «Подготовить таблицу» их не создала,
  * приложение работает без них: читает пустое значение и не пишет.
  */
-var OPTIONAL_COLUMNS = { prospect: true };
+var OPTIONAL_COLUMNS = {
+  prospect: true, otherLinks: true, channel: true,
+  priorContact: true, priorWhere: true, priorWhen: true, priorNote: true
+};
 
 /** Поля, в которых лежат даты (в таблице — настоящие Date, клиенту — ISO-строки). */
 var DATE_FIELDS = {
@@ -106,7 +115,8 @@ var DATE_FIELDS = {
   paidAt: true,
   taskAt: true,
   updatedAt: true,
-  date: true
+  date: true,
+  priorWhen: true
 };
 
 /** Префикс имён листов. runSelfTests() ставит 'TEST_', чтобы работать на временных копиях. */
@@ -135,7 +145,7 @@ function userError_(message, field) {
  * Обёртка над листом. Лист читается целиком один раз при создании объекта.
  * Строки — объекты с полями из SCHEMA и служебным _row (номер строки на листе).
  */
-function Table_(name) {
+function Table_(name, opts) {
   var sheet = SpreadsheetApp.getActive().getSheetByName(TABLE_PREFIX_ + name);
   if (!sheet) {
     throw userError_('В таблице нет листа «' + name + '». Откройте меню CRM → «Подготовить таблицу».');
@@ -143,7 +153,10 @@ function Table_(name) {
   this.name = name;
   this.sheet = sheet;
   this.fields = SCHEMA[name];
-  var values = sheet.getDataRange().getValues();
+  // headerOnly: только заголовки — для листов, куда лишь дописываем строки (Касания растут быстрее всех).
+  var values = opts && opts.headerOnly
+    ? sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()
+    : sheet.getDataRange().getValues();
   this.headers = (values[0] || []).map(function (h) { return String(h).trim(); });
   this.width = this.headers.length;
   this.data = values.slice(1);

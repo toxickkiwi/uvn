@@ -292,9 +292,63 @@ function selfTestCases_() {
       var empty = computeReport_([], parseTaskDate_('2026-09-01', '00:00'), parseTaskDate_('2026-09-02', '00:00'));
       assertEq_(empty.conversion, 0, 'нет обращений — конверсия 0');
     }],
-    ['Отчёт недоступен менеджеру', function () {
-      assertThrows_(function () { svcGetReport_(TEST_USER, '2026-09-01', '2026-09-30'); });
+    ['Отчёт доступен и менеджеру, и руководителю', function () {
+      svcGetReport_(TEST_USER, '2026-09-01', '2026-09-30');
       svcGetReport_(TEST_BOSS, '2026-09-01', '2026-09-30');
+    }],
+    ['Отчёт: новые и повторные обращения, «был контакт», активные диалоги по каналам', function () {
+      var d = function (s) { return new Date(s + 'T12:00:00+03:00'); };
+      var deals = [
+        { id: 'D1', clientId: 'C1', createdAt: d('2026-08-20'), channel: 'ВК', potok: 'Входящее', stage: 'Отказ' },
+        { id: 'D2', clientId: 'C1', createdAt: d('2026-10-02'), channel: 'ВК', potok: 'Входящее', stage: 'В диалоге' },
+        { id: 'D3', clientId: 'C2', createdAt: d('2026-10-03'), channel: 'Макс', potok: 'Исходящее', stage: 'В диалоге' },
+        { id: 'D4', clientId: 'C3', createdAt: d('2026-10-04'), channel: 'ВК', potok: 'Входящее', stage: 'Новое', priorContact: 'Да' },
+        { id: 'D5', clientId: 'C4', createdAt: d('2026-10-05'), channel: 'Инстаграм', potok: 'Входящее', stage: 'Новое', priorContact: 'Нет' }
+      ];
+      var touches = [
+        { dealId: 'D1', date: d('2026-10-01'), type: 'Написал', channel: 'ВК' },
+        { dealId: 'D1', date: d('2026-10-02'), type: 'Клиент ответил', channel: 'Макс' },
+        { dealId: 'D3', date: d('2026-10-03'), type: 'Написал', channel: '' },
+        { dealId: 'D3', date: d('2026-10-03'), type: 'Смена стадии', channel: '' },
+        { dealId: 'D5', date: d('2026-09-30'), type: 'Написал', channel: 'Инстаграм' }
+      ];
+      var r = computeReport_(deals, parseTaskDate_('2026-10-01', '00:00'), parseTaskDate_('2026-11-01', '00:00'), touches);
+      assertEq_([r.leads, r.newLeads, r.repeatLeads], [4, 2, 2], 'обращения: всего, новые, повторные');
+      assertEq_(r.newByPotok, { 'Исходящее': 1, 'Входящее': 1 }, 'новые по потокам');
+      assertEq_(r.priorContact, { 'Да': 1, 'Нет': 1, 'Не отмечено': 2 }, 'был контакт');
+      assertEq_(r.activeDialogs, 2, 'активные диалоги');
+      assertEq_(r.activeByChannel, { 'ВК': 1, 'Макс': 2 }, 'диалоги по каналам');
+    }],
+    ['Старая переписка задним числом: без смены стадии и авто-задачи, со своим каналом', function () {
+      var d = testDeal_('Входящее', '@t.old').deal;
+      var res = svcAddTouch_(u, d.id, { type: 'Написал', text: 'Писала в августе', date: '2026-08-15', channel: 'ВК' });
+      assertEq_([res.deal.stage, res.deal.taskAt], ['Новое', d.taskAt], 'сделка не изменилась');
+      assertEq_([res.touch.channel, res.touch.date], ['ВК', mskIso_('2026-08-15T12:00:00')], 'канал и дата касания');
+      assertThrows_(function () { svcAddTouch_(u, d.id, { type: 'Написал', date: '2026-12-01' }); }, 'date', 'будущая дата');
+      var now = svcAddTouch_(u, d.id, { type: 'Написал' });
+      assertEq_([now.touch.channel, now.deal.stage], ['ВК', 'В диалоге'], 'по умолчанию канал сделки');
+    }],
+    ['«Был контакт»: вручную и автоматически для клиента из CRM', function () {
+      var a = svcCreateDeal_(u, { client: { name: 'Нина', nick: 'nina.prior' }, deal: { channel: 'Макс', request: 'x', priorContact: 'Да', priorWhere: 'ВК', priorWhen: '2026-05-10', priorNote: 'Спрашивала про ЯБ весной' } });
+      var da = svcGetDeal_(u, a.dealId).deal;
+      assertEq_([da.priorContact, da.priorWhere, da.priorWhen, da.priorNote], ['Да', 'ВК', mskIso_('2026-05-10T00:00:00'), 'Спрашивала про ЯБ весной']);
+      var b = svcCreateDeal_(u, { clientId: a.clientId, deal: { channel: 'ВК', request: 'снова' } });
+      var db = svcGetDeal_(u, b.dealId).deal;
+      assertEq_([db.priorContact, db.priorWhere], ['Да', 'Макс'], 'из прошлой сделки');
+      var c = svcCreateDeal_(u, { client: { name: 'Новенькая', nick: 'nina.new' }, deal: { channel: 'ВК', request: 'x', priorContact: 'Нет', priorWhere: 'ВК' } });
+      assertEq_(svcGetDeal_(u, c.dealId).deal.priorWhere, '', '«Нет» — без «где»');
+    }],
+    ['Другие ссылки клиента участвуют в поиске дублей', function () {
+      var a = svcCreateDeal_(u, { client: { name: 'Вика', nick: 'vika.links' }, deal: { channel: 'ВК', request: 'x' }, force: true });
+      svcUpdateClient_(u, a.clientId, { otherLinks: 'https://vk.com/vika_l\nhttps://t.me/vika_l' });
+      var found = svcFindDuplicates_(u, { contact: 'https://t.me/vika_l/' });
+      assertEq_(found.length, 1, 'нашли по второй ссылке');
+    }],
+    ['Доска: открытые по колонкам, закрытые за период', function () {
+      var b = svcGetBoard_(u, {});
+      if (!b.open.length) throw new Error('нет открытых сделок');
+      if (b.open.some(function (d) { return d.stage === 'Оплачено' || d.stage === 'Отказ'; })) throw new Error('закрытые попали в открытые');
+      if (!b.paid.length || !b.lost.length) throw new Error('нет оплаченных или отказов за месяц: ' + b.paid.length + '/' + b.lost.length);
     }],
     ['Цвет строки: оплачено — зелёный, перспектива — жёлтый, иначе белый', function () {
       assertEq_(dealColor_({ stage: 'Оплачено', prospect: false }), 'green', 'оплачено');

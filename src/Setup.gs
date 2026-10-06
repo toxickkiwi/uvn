@@ -31,7 +31,10 @@ var DROPDOWNS = [
   { sheet: 'Сделки', header: 'Стадия', dict: 'Стадии' },
   { sheet: 'Сделки', header: 'Способ оплаты', dict: 'Способы оплаты' },
   { sheet: 'Сделки', header: 'Причина отказа', dict: 'Причины отказа' },
-  { sheet: 'Касания', header: 'Тип', dict: 'Типы касаний' }
+  { sheet: 'Касания', header: 'Тип', dict: 'Типы касаний' },
+  { sheet: 'Касания', header: 'Канал', dict: 'Каналы' },
+  { sheet: 'Сделки', header: 'Где был контакт', dict: 'Каналы' },
+  { sheet: 'Сделки', header: 'Был контакт', list: ['Да', 'Нет'] }
 ];
 
 /** Колонки, где цифры — это текст (телефон, номера): формат «обычный текст», чтобы не терялись нули. */
@@ -158,14 +161,17 @@ function applyDropdowns_(ss, log) {
   DROPDOWNS.forEach(function (d) {
     var sheet = ss.getSheetByName(d.sheet);
     var c = headerCol_(sheet, d.header);
-    var dc = headerCol_(dictSheet, d.dict);
-    if (!c || !dc) return;
-    var letter = colLetter_(dc);
-    var source = dictSheet.getRange(letter + '2:' + letter);
-    var rule = SpreadsheetApp.newDataValidation()
-      .requireValueInRange(source, true)
-      .setAllowInvalid(true)
-      .build();
+    if (!c) return;
+    var builder = SpreadsheetApp.newDataValidation();
+    if (d.list) {
+      builder = builder.requireValueInList(d.list, true);
+    } else {
+      var dc = headerCol_(dictSheet, d.dict);
+      if (!dc) return;
+      var letter = colLetter_(dc);
+      builder = builder.requireValueInRange(dictSheet.getRange(letter + '2:' + letter), true);
+    }
+    var rule = builder.setAllowInvalid(true).build();
     var rows = Math.max(sheet.getMaxRows() - 1, 1);
     sheet.getRange(2, c, rows, 1).setDataValidation(rule);
   });

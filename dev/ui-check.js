@@ -14,14 +14,32 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   p.on('pageerror', (e) => errs.push(e.message));
   p.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errs.push(m.text()); });
   const step = async (name, fn) => { await fn(); console.log('✓', name); };
+  // SortableJS нужен «живой» жест мыши: плавное движение, а не мгновенный перенос.
+  const drag = async (from, to) => {
+    await to.scrollIntoViewIfNeeded();
+    const a = await from.boundingBox();
+    const b = await to.boundingBox();
+    await p.mouse.move(a.x + 20, a.y + 10);
+    await p.mouse.down();
+    for (let i = 1; i <= 15; i++) {
+      await p.mouse.move(a.x + 20 + (b.x + 30 - a.x - 20) * i / 15, a.y + 10 + (b.y + 40 - a.y - 10) * i / 15);
+      await p.waitForTimeout(25);
+    }
+    await p.mouse.up();
+  };
   await p.goto(BASE + '/#today');
   await p.waitForSelector('.counters', { timeout: 90000 });
 
+  await step('«Просрочено» свёрнуто и раскрывается по клику', async () => {
+    if (await p.locator('.block >> nth=0').locator('.drow').first().isVisible()) throw new Error('просроченные видны сразу');
+    await p.click('.block-head.toggle >> nth=0');
+    await p.locator('.block >> nth=0').locator('.drow').first().waitFor();
+  });
   await step('«Написал» убирает сделку из просроченных', async () => {
     const before = await p.locator('.badge.red').innerText();
-    const name = await p.locator('.drow >> nth=1').locator('.drow-name').innerText();
-    await p.locator('.drow >> nth=1').locator('text=Написал').click();
-    await p.waitForSelector('.toast:has-text("Касание добавлено")');
+    const name = await p.locator('.block >> nth=0').locator('.drow:has(.stage:text-is("В диалоге"))').first().locator('.drow-name').innerText();
+    await p.locator('.block >> nth=0').locator('.drow:has(.stage:text-is("В диалоге"))').first().locator('text=Написал').click();
+    await p.waitForSelector('.toast:has-text("Касание добавлено")', { timeout: 1000 });
     const after = await p.locator('.badge.red').innerText();
     if (+after !== +before - 1) throw new Error(before + ' → ' + after);
     const touches = await p.locator('.counter >> nth=1').locator('.num').innerText();
@@ -52,6 +70,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.click('.modal >> text=Инстаграм');
     await p.fill('.modal input.input >> nth=0', 'https://instagram.com/New.Client_77/');
     await p.locator('.modal input.input >> nth=1').fill('Вера');
+    await p.click('.modal >> text=Да, общались');
+    await p.selectOption('.modal .prior-box select', 'ВК');
+    await p.fill('.modal .prior-box input[type=date]', '2026-05-10');
+    await p.fill('.modal .prior-box input:not([type])', 'Весной спрашивала про УСН');
     await p.waitForTimeout(500);
     await p.fill('.modal textarea', 'Хочет на УСН, спрашивает про рассрочку');
     await p.keyboard.press('Enter');
@@ -89,6 +111,23 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const stage = await p.locator('.deal-head .stage').innerText();
     if (stage !== 'В диалоге') throw new Error('стадия ' + stage);
   });
+  await step('«Был контакт» сохранился в карточке', async () => {
+    const box = await p.locator('.zone-deal .prior-box').innerText();
+    if (!/Был контакт/.test(box)) throw new Error(box);
+    const where = await p.locator('.zone-deal .prior-box select').inputValue();
+    if (where !== 'ВК') throw new Error('где: ' + where);
+  });
+  await step('Старая переписка с датой и каналом; касание появляется сразу', async () => {
+    await p.click('.touch-form >> text=Клиент ответил');
+    await p.fill('.touch-form textarea', 'Отвечала в ВК в мае');
+    await p.selectOption('.touch-form select', 'ВК');
+    await p.click('text=старая переписка? указать дату');
+    await p.fill('.touch-form input[type=datetime-local]', '2026-05-12T15:00');
+    await p.click('.touch-form button.btn.primary');
+    await p.waitForSelector('.feed-item:not(.pending):has-text("Отвечала в ВК в мае")', { timeout: 8000 });
+    const last = await p.locator('.feed-item').last().innerText();
+    if (!/Отвечала в ВК в мае/.test(last) || !/12\.05/.test(last)) throw new Error('старая переписка не в конце ленты: ' + last);
+  });
   await step('История: входящие и исходящие помечены', async () => {
     const meta = await p.locator('.feed-item .feed-meta').allInnerTexts();
     if (!meta.some((m) => /исходящее\s*Шаблон/.test(m)) || !meta.some((m) => /входящее\s*Обращение/.test(m))) throw new Error(meta.join(' / '));
@@ -116,7 +155,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   });
   await step('Поиск по нику открывает карточку', async () => {
     await p.keyboard.press('Escape');
-    await p.click('body');
+    await p.click('.deal-head h1');
     await p.keyboard.press('/');
     await p.keyboard.type('malinka');
     await p.waitForSelector('.search-item', { timeout: 5000 });
@@ -128,6 +167,38 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.waitForSelector('.banner');
     await p.click('.banner >> text=Проверено');
     await p.waitForSelector('.banner', { state: 'detached' });
+  });
+  await step('Доска: колонки по стадиям, перетаскивание в «Отказ» открывает окно, отмена возвращает', async () => {
+    await p.click('.topbar .tab:has-text("Доска")');
+    await p.waitForSelector('.board .bcol', { timeout: 15000 });
+    const cols = await p.locator('.bcol-head .stage').allInnerTexts();
+    if (cols.join('|') !== 'Новое|В диалоге|Курс подобран|Заказ создан|Отложено|Оплачено|Отказ') throw new Error(cols.join('|'));
+    const src = p.locator('.bcol >> nth=1').locator('.bcard').first();
+    const name = await src.locator('b').innerText();
+    const before = await p.locator('.bcol >> nth=1').locator('.bcard').count();
+    await drag(src, p.locator('.bcol.closed >> nth=1').locator('.bcol-body'));
+    await p.waitForSelector('.modal h2:has-text("Отказ")', { timeout: 5000 });
+    await p.click('.modal >> text=Отмена');
+    const after = await p.locator('.bcol >> nth=1').locator('.bcard').count();
+    if (after !== before) throw new Error('карточка не вернулась: ' + before + ' → ' + after);
+    const src2 = p.locator('.bcol >> nth=1').locator('.bcard').first();
+    await drag(src2, p.locator('.bcol >> nth=2').locator('.bcol-body'));
+    await p.waitForFunction((n) => [...document.querySelectorAll('.bcol')][2].innerText.includes(n), name, { timeout: 8000 });
+  });
+  await step('Отчёт: новые входящие/исходящие и диалоги по каналам', async () => {
+    await p.click('.topbar .tab:has-text("Отчёт")');
+    await p.waitForSelector('.kpis', { timeout: 15000 });
+    const k = await p.locator('.kpis').innerText();
+    if (!/новые: входящие \/ исходящие/.test(k) || !/активных диалогов/.test(k)) throw new Error(k);
+    const rows = await p.locator('.tbl >> nth=0').locator('tbody tr').count();
+    if (!rows) throw new Error('нет строк по каналам');
+    console.log('   ', k.replace(/\s+/g, ' ').slice(0, 160));
+  });
+  await step('Как работать: схема ведёт по шагам', async () => {
+    await p.click('.topbar .tab:has-text("Как работать")');
+    await p.click('text=Нет, не нашёлся');
+    await p.click('text=Клиент написал нам');
+    await p.waitForSelector('.flow-node.answer:has-text("Входящее")');
   });
   await p.screenshot({ path: (process.argv[3] || '.') + '/ui-check.png' });
   console.log('Ошибки в консоли:', errs.length ? errs : 'нет');

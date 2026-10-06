@@ -7,7 +7,15 @@
  */
 
 function getBootstrap() {
-  return api_(function (user) {
+  return api_(function (user) { return bootstrapData_(user); });
+}
+
+/** Первая загрузка сайта одним запросом: настройки + экран «Сегодня». */
+function getStart() {
+  return api_(function (user) { return { boot: bootstrapData_(user), today: svcGetToday_(user) }; });
+}
+
+function bootstrapData_(user) {
     var ref = getRef_();
     return {
       user: { email: user.email, name: user.name, role: user.role },
@@ -21,7 +29,6 @@ function getBootstrap() {
       appUrl: ScriptApp.getService().getUrl() || '',
       now: now_().toISOString()
     };
-  });
 }
 
 function getToday() { return api_(function (user) { return svcGetToday_(user); }); }
@@ -35,6 +42,7 @@ function addTouch(dealId, touch) { return api_(function (user) { return svcAddTo
 function logTemplateUse(dealId, templateId) { return api_(function (user) { return svcLogTemplateUse_(user, dealId, templateId); }); }
 function markChecked(kind, id) { return api_(function (user) { return svcMarkChecked_(user, kind, id); }); }
 function getReport(from, to) { return api_(function (user) { return svcGetReport_(user, from, to); }); }
+function getBoard(filter) { return api_(function (user) { return svcGetBoard_(user, filter || {}); }); }
 
 /* ---------- Представление данных для клиента ---------- */
 
@@ -178,10 +186,11 @@ function svcListDeals_(user, filter) {
 /* ---------- Карточка ---------- */
 
 function svcGetDeal_(user, id) {
-  var deal = new Table_(SHEET.DEALS).find('id', id);
+  var dealsT = new Table_(SHEET.DEALS);
+  var deal = dealsT.find('id', id);
   if (!deal) throw userError_('Сделка ' + id + ' не найдена.');
   var client = new Table_(SHEET.CLIENTS).find('id', deal.clientId);
-  var allDeals = new Table_(SHEET.DEALS).all();
+  var allDeals = dealsT.all();
   var touchesAll = new Table_(SHEET.TOUCHES).all();
   var stats = touchStats_(touchesAll);
   var users = usersByEmail_();
@@ -218,7 +227,7 @@ function svcFindDuplicates_(user, draft) {
   return duplicatesView_(matches, new Table_(SHEET.DEALS).all());
 }
 
-var CLIENT_EDITABLE = ['name', 'nick', 'dialogUrl', 'gcId', 'email', 'phone'];
+var CLIENT_EDITABLE = ['name', 'nick', 'dialogUrl', 'gcId', 'email', 'phone', 'otherLinks'];
 
 function svcUpdateClient_(user, id, patch) {
   return withLock_(function () {
@@ -240,7 +249,7 @@ function svcUpdateClient_(user, id, patch) {
     }
     if (!patch.force) {
       var dupDraft = {};
-      CONTACT_FIELDS.forEach(function (f) { if (f in norm && norm[f]) dupDraft[f] = norm[f]; });
+      CONTACT_FIELDS.concat(['otherLinks']).forEach(function (f) { if (f in norm && norm[f]) dupDraft[f] = norm[f]; });
       var dups = findDuplicateClients_(t.all(), dupDraft, id);
       if (dups.length) {
         var d = dups[0];
@@ -260,7 +269,7 @@ function svcCreateDeal_(user, payload) {
     var now = now_();
     var clientsT = new Table_(SHEET.CLIENTS);
     var dealsT = new Table_(SHEET.DEALS);
-    var touchesT = new Table_(SHEET.TOUCHES);
+    var touchesT = new Table_(SHEET.TOUCHES, { headerOnly: true });
     var dealIn = payload.deal || {};
 
     var potok = dealIn.potok || POTOK.INBOUND;
@@ -308,8 +317,29 @@ function svcCreateDeal_(user, payload) {
       check: '',
       owner: user.email,
       updatedAt: now,
-      prospect: toBool_(dealIn.prospect)
+      prospect: toBool_(dealIn.prospect),
+      priorContact: normPrior_(dealIn.priorContact),
+      priorWhere: String(dealIn.priorWhere || '').trim(),
+      priorWhen: parseTaskDate_(dealIn.priorWhen, '00:00'),
+      priorNote: String(dealIn.priorNote || '').trim()
     };
+    // Клиент уже есть в CRM — значит, контакт был: где и когда берём из его последней сделки.
+    if (payload.clientId && !deal.priorContact) {
+      var last = dealsT.all()
+        .filter(function (d) { return String(d.clientId) === String(client.id); })
+        .sort(function (a, b) { return (isDate_(b.createdAt) ? b.createdAt.getTime() : 0) - (isDate_(a.createdAt) ? a.createdAt.getTime() : 0); })[0];
+      deal.priorContact = 'Да';
+      if (last) {
+        if (!deal.priorWhere) deal.priorWhere = last.channel;
+        if (!isDate_(deal.priorWhen) && isDate_(last.createdAt)) deal.priorWhen = mskDayStart_(last.createdAt, 0);
+        if (!deal.priorNote) deal.priorNote = 'Сделка ' + last.id + (last.stage ? ' (' + last.stage + ')' : '');
+      }
+    }
+    if (deal.priorContact !== 'Да') {
+      deal.priorWhere = '';
+      deal.priorWhen = '';
+    }
+    if (isDate_(deal.priorWhen) && deal.priorWhen.getTime() > now.getTime()) throw userError_('Дата прошлого контакта не может быть в будущем.', 'priorWhen');
     if (deal.amount === '' || deal.amount === null) {
       var price = tariffPrice_(ref.tariffs, deal.course, deal.tariff);
       deal.amount = price === null ? '' : price;
@@ -321,7 +351,7 @@ function svcCreateDeal_(user, payload) {
     }
     applyDealRules_(deal, null, { dicts: ref.dicts, now: now });
     dealsT.append(deal);
-    touchesT.append({ dealId: deal.id, date: now, type: TOUCH.LEAD, text: request, author: user.email });
+    touchesT.append({ dealId: deal.id, date: now, type: TOUCH.LEAD, text: request, author: user.email, channel: deal.channel });
     return { dealId: deal.id, clientId: client.id };
   });
 }
@@ -335,7 +365,8 @@ function settingsWithDefaults_() {
 /* ---------- Изменение сделки ---------- */
 
 var DEAL_EDITABLE = ['potok', 'channel', 'request', 'course', 'tariff', 'amount', 'payMethod', 'orderNo',
-  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt', 'prospect'];
+  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt', 'prospect',
+  'priorContact', 'priorWhere', 'priorWhen', 'priorNote'];
 
 /**
  * Общая часть updateDeal / addTouch / cron: применяет patch к сделке, проверяет правила,
@@ -359,7 +390,7 @@ function saveDeal_(user, dealsT, touchesT, before, patch, now) {
 
   var newTouches = [];
   if (before.stage !== saved.stage) {
-    var touch = { dealId: saved.id, date: now, type: TOUCH.STAGE, text: stageChangeText_(before.stage, saved), author: user.email };
+    var touch = { dealId: saved.id, date: now, type: TOUCH.STAGE, text: stageChangeText_(before.stage, saved), author: user.email, channel: saved.channel };
     touchesT.append(touch);
     newTouches.push(touch);
   }
@@ -369,13 +400,18 @@ function saveDeal_(user, dealsT, touchesT, before, patch, now) {
 function svcUpdateDeal_(user, id, patch) {
   return withLock_(function () {
     var dealsT = new Table_(SHEET.DEALS);
-    var touchesT = new Table_(SHEET.TOUCHES);
+    var touchesT = new Table_(SHEET.TOUCHES, { headerOnly: true });
     var before = dealsT.find('id', id);
     if (!before) throw userError_('Сделка ' + id + ' не найдена.');
     var clean = {};
     DEAL_EDITABLE.forEach(function (f) { if (f in patch) clean[f] = patch[f]; });
     if ('taskAt' in clean) clean.taskAt = parseTaskDate_(clean.taskAt, setting_('TASK_DEFAULT_TIME'));
     if ('paidAt' in clean) clean.paidAt = parseTaskDate_(clean.paidAt, '00:00');
+    if ('priorWhen' in clean) {
+      clean.priorWhen = parseTaskDate_(clean.priorWhen, '00:00');
+      if (isDate_(clean.priorWhen) && clean.priorWhen.getTime() > now_().getTime()) throw userError_('Дата прошлого контакта не может быть в будущем.', 'priorWhen');
+    }
+    if ('priorContact' in clean) clean.priorContact = normPrior_(clean.priorContact);
     ['nextTask', 'request', 'course', 'tariff', 'orderNo'].forEach(function (f) {
       if (f in clean) clean[f] = String(clean[f] || '').trim();
     });
@@ -399,22 +435,28 @@ function dealResult_(res) {
 function addTouchInternal_(user, dealId, touch, now) {
   var ref = getRef_();
   var dealsT = new Table_(SHEET.DEALS);
-  var touchesT = new Table_(SHEET.TOUCHES);
+  var touchesT = new Table_(SHEET.TOUCHES, { headerOnly: true });
   var before = dealsT.find('id', dealId);
   if (!before) throw userError_('Сделка ' + dealId + ' не найдена.');
   var type = touch.type;
+  var channel = String(touch.channel || before.channel || '').trim();
+  if (channel && ref.dicts.channels.indexOf(channel) < 0) throw userError_('Выберите канал из списка.', 'channel');
+  // Старая переписка вносится задним числом: дата в прошлом — без авто-задачи и смены стадии.
+  var when = touch.date ? parseTaskDate_(touch.date, '12:00') : now;
+  if (when.getTime() > now.getTime() + 5 * 60000) throw userError_('Дата касания не может быть в будущем.', 'date');
+  var backdated = when.getTime() < now.getTime() - 3600 * 1000;
   if (ref.dicts.touchTypes.indexOf(type) < 0) throw userError_('Выберите тип касания.', 'type');
   if (SYSTEM_TOUCHES.indexOf(type) >= 0) throw userError_('Касание «' + type + '» добавляется автоматически.', 'type');
   var text = String(touch.text || '').trim();
   if (type === TOUCH.NOTE && !text) throw userError_('Напишите текст заметки.', 'text');
 
   var patch = {};
-  if (before.stage === STAGE.NEW) patch.stage = STAGE.TALK;
+  if (before.stage === STAGE.NEW && !backdated) patch.stage = STAGE.TALK;
   var stageAfter = patch.stage || before.stage;
   if (touch.nextTask || touch.nextTaskDate) {
     if (touch.nextTask) patch.nextTask = String(touch.nextTask).trim();
     if (touch.nextTaskDate) patch.taskAt = parseTaskDate_(touch.nextTaskDate, setting_('TASK_DEFAULT_TIME'));
-  } else if (FOLLOWUP_TOUCHES.indexOf(type) >= 0 && isOpenStage_(stageAfter) && stageAfter !== STAGE.POSTPONED) {
+  } else if (!backdated && FOLLOWUP_TOUCHES.indexOf(type) >= 0 && isOpenStage_(stageAfter) && stageAfter !== STAGE.POSTPONED) {
     var f = followupTask_(now, settingsWithDefaults_());
     patch.nextTask = f.nextTask;
     patch.taskAt = f.taskAt;
@@ -424,7 +466,7 @@ function addTouchInternal_(user, dealId, touch, now) {
   var res = Object.keys(patch).length
     ? saveDeal_(user, dealsT, touchesT, before, patch, now)
     : { deal: before, newTouches: [] };
-  var row = { dealId: before.id, date: now, type: type, text: text, author: user.email };
+  var row = { dealId: before.id, date: when, type: type, text: text, author: user.email, channel: channel };
   touchesT.append(row);
   res.newTouches.unshift(row);
   return res;
@@ -463,10 +505,33 @@ function svcMarkChecked_(user, kind, id) {
 /* ---------- Отчёт ---------- */
 
 function svcGetReport_(user, from, to) {
-  if (!isBoss_(user)) throw userError_('Отчёт доступен только руководителю.');
   var fromDay = parseTaskDate_(from, '00:00');
   var toDay = parseTaskDate_(to, '00:00');
   if (!isDate_(fromDay) || !isDate_(toDay)) throw userError_('Укажите период отчёта.');
   if (toDay < fromDay) throw userError_('Начало периода позже конца.');
-  return computeReport_(new Table_(SHEET.DEALS).all(), fromDay, mskDayStart_(toDay, 1));
+  return computeReport_(new Table_(SHEET.DEALS).all(), fromDay, mskDayStart_(toDay, 1), new Table_(SHEET.TOUCHES).all());
+}
+
+/* ---------- Доска ---------- */
+
+/**
+ * Открытые сделки по колонкам + закрытые за период (по умолчанию текущий месяц):
+ * «Оплачено» — по дате оплаты, «Отказ» — по дате последнего изменения.
+ */
+function svcGetBoard_(user, filter) {
+  var now = now_();
+  var from = filter.from ? parseTaskDate_(filter.from, '00:00') : mskMonthStart_(now, 0);
+  var to = filter.to ? mskDayStart_(parseTaskDate_(filter.to, '00:00'), 1) : mskMonthStart_(now, 1);
+  var rows = svcListDeals_(user, { potok: filter.potok, channel: filter.channel, course: filter.course, query: filter.query, limit: 100000 });
+  var inPeriod = function (iso) { if (!iso) return false; var t = new Date(iso); return t >= from && t < to; };
+  var open = [];
+  var paid = [];
+  var lost = [];
+  rows.forEach(function (d) {
+    if (isOpenStage_(d.stage)) open.push(d);
+    else if (d.stage === STAGE.PAID && inPeriod(d.paidAt)) paid.push(d);
+    else if (d.stage === STAGE.LOST && inPeriod(d.updatedAt)) lost.push(d);
+  });
+  open.sort(function (a, b) { return (a.taskAt || '9').localeCompare(b.taskAt || '9'); });
+  return { open: open, paid: paid, lost: lost, from: from.toISOString(), to: new Date(to.getTime() - 1).toISOString() };
 }

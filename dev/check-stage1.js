@@ -30,9 +30,12 @@ test('setupSpreadsheet на стартовой таблице: данные не
   const norm = (rows) => rows.map((r) => r.map((v) => (v === 'Реактивация' ? 'Исходящее' : v)));
   names.forEach((n) => {
     let after = sim.ss.dump(n);
-    if (n === 'Сделки') {
-      assert.strictEqual(after[0][20], 'Перспектива');
-      after = after.map((r) => r.slice(0, 20));
+    // Новые колонки дописываются в конец: «Перспектива» и «Был контакт…» в «Сделки», «Другие ссылки», «Канал».
+    const added = { 'Сделки': ['Перспектива', 'Был контакт', 'Где был контакт', 'Когда был контакт', 'Комментарий о контакте'], 'Клиенты': ['Другие ссылки'], 'Касания': ['Канал'] }[n];
+    if (added) {
+      const w = before[n][0].length;
+      assert.deepStrictEqual(after[0].slice(w), added, 'новые колонки ' + n);
+      after = after.map((r) => r.slice(0, w));
     }
     assert.deepStrictEqual(after, norm(before[n]).map((r) => r.slice(0, after[0] ? Math.max(after[0].length, r.length) : r.length)), 'изменился лист ' + n);
   });
@@ -78,7 +81,7 @@ test('недостающая колонка дописывается в коне
   const sim = create({ workbook: wb });
   sim.ctx.setupSpreadsheet();
   const h = sim.ss.dump('Касания')[0];
-  assert.deepStrictEqual(h, ['Дата', 'ID сделки', 'Тип', 'Текст', 'Автор']);
+  assert.deepStrictEqual(h, ['Дата', 'ID сделки', 'Тип', 'Текст', 'Автор', 'Канал']);
   assert.strictEqual(sim.ss.dump('Касания')[1][1], 'D001');
 });
 
