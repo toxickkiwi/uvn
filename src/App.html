@@ -662,7 +662,7 @@
   var TemplatesPanel = {
     props: ['deal', 'client'],
     emits: ['used', 'close'],
-    data: function () { return { q: '', selected: null, busy: false }; },
+    data: function () { return { q: '', selected: null, busy: false, copied: null }; },
     template:
       '<div class="tpl-panel">' +
       '  <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)">' +
@@ -684,7 +684,9 @@
       '        <div class="row"><b class="grow">{{ selected.title }}</b><span class="faint">{{ selected.situation }}</span></div>' +
       '        <div class="tpl-text" v-html="filled.html"></div>' +
       '        <div v-if="missing.length" class="hint warn">Не заполнено: {{ missing.join(", ") }} — эти места останутся пустыми.</div>' +
-      '        <div class="row" style="margin-top:8px"><button class="btn primary" :disabled="busy" @click="copy">Скопировать</button></div>' +
+      '        <div class="row wrap" style="margin-top:8px;gap:8px"><button class="btn" :class="{primary: !isCopied}" :disabled="busy" @click="copy">📋 Скопировать</button>' +
+      '          <button class="btn" :class="{primary: isCopied}" :disabled="busy" @click="sent" title="Записать в историю «Шаблон» и поставить задачу «Написать повторно»">✓ Отправил</button>' +
+      '          <span class="small muted" v-if="isCopied">Скопировано. Когда отправите клиенту — нажмите «Отправил».</span></div>' +
       '      </template>' +
       '    </div>' +
       '  </div>' +
@@ -712,6 +714,7 @@
         return order.map(function (n) { return { name: n || 'Без ситуации', items: map[n] }; });
       },
       filled: function () { return fillTemplate(this.selected ? this.selected.text : '', this.vars); },
+      isCopied: function () { return !!this.selected && this.copied === this.selected.id; },
       missing: function () {
         var self = this;
         var names = [];
@@ -723,19 +726,26 @@
     },
     methods: {
       quick: function (t) { this.selected = t; this.copy(); },
+      /** Только копирует: «Написал» отмечается отдельной кнопкой, когда сообщение правда ушло. */
       copy: function () {
         var self = this;
         var tpl = this.selected;
         copyText(this.filled.text).then(function () {
-          toast('Скопировано');
-          self.busy = true;
-          save(call('logTemplateUse', self.deal.id, tpl.id)).then(function (res) {
-            self.busy = false;
-            self.$emit('used', res);
-          }, function () { self.busy = false; });
+          self.copied = tpl.id;
+          toast('Скопировано. Отправили — нажмите «Отправил»');
         }, function () {
           toast('Браузер не дал скопировать. Выделите текст и нажмите Ctrl+C.', true);
         });
+      },
+      sent: function () {
+        var self = this;
+        var tpl = this.selected;
+        self.busy = true;
+        save(call('logTemplateUse', self.deal.id, tpl.id)).then(function (res) {
+          self.busy = false;
+          self.copied = null;
+          self.$emit('used', res);
+        }, function () { self.busy = false; });
       }
     }
   };
@@ -2459,7 +2469,7 @@
   var PersonPanel = {
     props: ['p', 'templates', 'task', 'hasNext'],
     emits: ['close', 'changed', 'next'],
-    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false, removeOpen: false, removeReason: '' }; },
+    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false, removeOpen: false, removeReason: '', copiedId: null }; },
     template:
       '<div class="person-panel panel">' +
       '  <div class="row"><h2 class="grow" style="margin:0">{{ p.name || "Без имени" }}</h2><button class="btn ghost sm" @click="$emit(\'close\')">✕</button></div>' +
@@ -2480,7 +2490,9 @@
       '  <div v-for="t in shown" :key="t.id" class="ptpl" :class="{used: p.templateId === t.id}">' +
       '    <div class="row"><b class="grow">{{ t.title }}</b><span class="small muted" v-if="t.segment && t.segment !== p.segment">{{ t.segment }}</span><span class="small" v-if="p.templateId === t.id">✓ отправлен</span></div>' +
       '    <div class="tpl-text small" v-html="filled(t).html"></div>' +
-      '    <button class="btn primary sm" :disabled="busy" @click="copyAndMark(t)">Скопировать и отметить «написали»</button>' +
+      '    <div class="row wrap" style="gap:6px"><button class="btn sm" :class="{primary: copiedId !== t.id}" :disabled="busy" @click="copyOnly(t)">📋 Скопировать</button>' +
+      '      <button class="btn sm" :class="{primary: copiedId === t.id}" :disabled="busy" @click="markSent(t)">✓ Отправил</button>' +
+      '      <span class="small muted" v-if="copiedId === t.id">скопировано — отправьте и нажмите «Отправил»</span></div>' +
       '  </div>' +
       '  <a href="#" class="small-link" v-if="others.length && !showAll" @click.prevent="showAll = true">показать шаблоны других сегментов ({{ others.length }})</a>' +
       '  <div class="field" style="margin-top:12px"><label>Что ответил</label><div class="seg">' +
@@ -2506,7 +2518,7 @@
       others: function () { var sg = this.p.segment; return this.templates.filter(function (t) { return t.segment && t.segment !== sg; }); },
       shown: function () { return this.showAll ? this.own.concat(this.others) : this.own; }
     },
-    watch: { p: function (v) { this.note = v.note || ''; } },
+    watch: { p: function (v, old) { this.note = v.note || ''; if (!old || old.id !== v.id) this.copiedId = null; } },
     methods: {
       fmtDate: fmtDate,
       cls: function (s) { return PERSON_STATUS_CLASS[s] || ''; },
@@ -2535,16 +2547,22 @@
           toast('Убрали из задания');
         }, function () { self.busy = false; });
       },
-      copyAndMark: function (t) {
+      /** Только копирует. «Написали» — отдельной кнопкой «Отправил», когда сообщение правда ушло. */
+      copyOnly: function (t) {
         var self = this;
-        if (!this.channel) { toast('Выберите, куда пишете: ВК, Инстаграм…', true); return; }
         copyText(this.filled(t).text).then(function () {
-          toast('Скопировано — вставьте в ' + self.channel);
-          self.busy = true;
-          self.$emit('changed', Object.assign({}, self.p, { status: self.p.status === 'Не написали' ? 'Написали' : self.p.status, templateId: t.id, channel: self.channel, sentAt: new Date().toISOString() }));
-          save(call('markPersonSent', self.p.id, t.id, self.channel)).then(function (np) { self.busy = false; self.$emit('changed', np); },
-            function () { self.busy = false; });
+          self.copiedId = t.id;
+          toast('Скопировано' + (self.channel ? ' — вставьте в ' + self.channel : '') + '. Отправите — нажмите «Отправил»');
         }, function () { toast('Браузер не дал скопировать', true); });
+      },
+      markSent: function (t) {
+        var self = this;
+        if (!this.channel) { toast('Выберите, куда написали: ВК, Инстаграм…', true); return; }
+        self.busy = true;
+        self.copiedId = null;
+        self.$emit('changed', Object.assign({}, self.p, { status: self.p.status === 'Не написали' ? 'Написали' : self.p.status, templateId: t.id, channel: self.channel, sentAt: new Date().toISOString() }));
+        save(call('markPersonSent', self.p.id, t.id, self.channel)).then(function (np) { self.busy = false; self.$emit('changed', np); },
+          function () { self.busy = false; });
       },
       setStatus: function (s) {
         var self = this;

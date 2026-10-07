@@ -133,18 +133,21 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.selectOption(tariffSel, 'Золотая середина');
     await p.waitForFunction(() => document.querySelector('.zone-deal input[type=number]').value === '59900', null, { timeout: 5000 });
   });
-  await step('Шаблон: быстрое копирование 📋 одной кнопкой', async () => {
+  await step('Шаблон: 📋 только копирует, в историю не пишет', async () => {
     await p.click('text=Шаблоны');
     await p.click('.tpl-item-row:has-text("Рассрочка одобрена") .tpl-quick');
-    await p.waitForSelector('.feed-item:has-text("Шаблон: Рассрочка одобрена")', { timeout: 8000 });
+    await p.waitForSelector('.tpl-panel >> text=Скопировано. Когда отправите', { timeout: 8000 });
     const clip = await p.evaluate(() => navigator.clipboard.readText());
     if (!/^Вера, добрый день/.test(clip)) throw new Error('буфер: ' + clip);
+    await p.waitForTimeout(800);
+    if (await p.locator('.feed-item:has-text("Шаблон: Рассрочка одобрена")').count()) throw new Error('копирование уже отметило «Шаблон»');
     await p.click('.tpl-panel >> text=Закрыть');
   });
-  await step('Шаблон: копирование с именем и касание «Шаблон»', async () => {
+  await step('Шаблон: «Скопировать», потом «Отправил» → касание «Шаблон»', async () => {
     await p.click('text=Шаблоны');
     await p.click('.tpl-item:has-text("Рассрочка одобрена")');
-    await p.click('text=Скопировать');
+    await p.click('.tpl-preview >> text=Скопировать');
+    await p.click('.tpl-preview >> text=Отправил');
     await p.waitForSelector('.feed-item:has-text("Шаблон: Рассрочка одобрена")', { timeout: 5000 });
     const clip = await p.evaluate(() => navigator.clipboard.readText());
     if (!/^Вера, добрый день/.test(clip)) throw new Error('буфер: ' + clip);
@@ -274,8 +277,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.waitForSelector('.person-panel');
     const ch = await p.locator('.person-panel .seg .btn.on').first().innerText();
     if (ch !== 'Инстаграм') throw new Error('канал по utm_source: ' + ch);
-    await p.click('.person-panel >> text=Скопировать и отметить');
-    await p.waitForSelector('.prow:has-text("Анна") .pstatus:has-text("Написали")', { timeout: 15000 });
+    await p.click('.person-panel >> text=Скопировать');
+    await p.waitForTimeout(800);
+    if (await p.locator('.prow:has-text("Анна") .pstatus:text-is("Написали")').count()) throw new Error('копирование уже отметило «Написали»');
+    await p.click('.person-panel >> text=Отправил');
+    await p.waitForSelector('.prow:has-text("Анна") .pstatus:text-is("Написали")', { timeout: 15000 });
     const clip = await p.evaluate(() => navigator.clipboard.readText());
     if (!/^Анна, добрый день! Это Максим\./.test(clip)) throw new Error('буфер: ' + clip);
     await p.click('.person-panel >> text=Ответил → в CRM');
