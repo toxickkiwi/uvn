@@ -2250,7 +2250,7 @@
   };
 
   /* ---------- Задания по спискам ---------- */
-  var PERSON_STATUS_CLASS = { 'Не написали': 'ps-todo', 'Написали': 'ps-sent', 'Ответил': 'ps-replied', 'Не интересно': 'ps-no', 'Купил': 'ps-bought' };
+  var PERSON_STATUS_CLASS = { 'Не написали': 'ps-todo', 'Написали': 'ps-sent', 'Ответил': 'ps-replied', 'Не интересно': 'ps-no', 'Купил': 'ps-bought', 'Не пишем': 'ps-skip', 'Удалён': 'ps-no' };
   function pctOf(a, b) { return b ? Math.round(a / b * 100) + '%' : '—'; }
   function periodOf(t) {
     var now = nowMs();
@@ -2360,7 +2360,7 @@
     template:
       '<div class="tprog" v-if="s">' +
       '  <div class="tprog-bar"><span class="tp-sent" :style="{width: w(s.sent - s.answered)}"></span><span class="tp-ans" :style="{width: w(s.answered)}"></span></div>' +
-      '  <div class="small muted">людей {{ s.total }} · написали {{ s.sent }} · ответили {{ s.answered }} <span v-if="s.sent">({{ pct(s.answered, s.sent) }})</span><span v-if="s.bought"> · купили {{ s.bought }}</span></div>' +
+      '  <div class="small muted">людей {{ s.total }} · написали {{ s.sent }} · ответили {{ s.answered }} <span v-if="s.sent">({{ pct(s.answered, s.sent) }})</span><span v-if="s.bought"> · купили {{ s.bought }}</span><span v-if="s.skipped"> · не пишем {{ s.skipped }}</span></div>' +
       '</div>',
     methods: {
       w: function (n) { return (this.s.total ? n / this.s.total * 100 : 0) + '%'; },
@@ -2469,7 +2469,7 @@
   var PersonPanel = {
     props: ['p', 'templates', 'task', 'hasNext'],
     emits: ['close', 'changed', 'next'],
-    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false, removeOpen: false, removeReason: '', copiedId: null }; },
+    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false, removeOpen: false, removeReason: '', reasonMode: 'remove', copiedId: null }; },
     template:
       '<div class="person-panel panel">' +
       '  <div class="row"><h2 class="grow" style="margin:0">{{ p.name || "Без имени" }}</h2><button class="btn ghost sm" @click="$emit(\'close\')">✕</button></div>' +
@@ -2477,6 +2477,7 @@
       '    <a v-if="p.dealId || p.crmDealId" class="btn sm primary" href="#" @click.prevent="openDeal">Открыть в CRM ({{ p.dealId || p.crmDealId }})</a>' +
       '    <button v-else class="btn sm" :disabled="busy" @click="toCrm">Завести в CRM</button></div>' +
       '  <div v-if="p.status === \'Удалён\'" class="banner"><span class="grow">Удалён из задания: {{ p.note }}</span><button class="btn sm" :disabled="busy" @click="setStatus(\'Не написали\')">Вернуть в задание</button></div>' +
+      '  <div v-if="p.status === \'Не пишем\'" class="banner skip-banner"><span class="grow"><b>Не пишем:</b> {{ p.note || "причина не указана" }}</span><button class="btn sm" :disabled="busy" @click="setStatus(\'Не написали\')">Всё-таки написать</button></div>' +
       '  <div class="contacts">' +
       '    <a v-if="p.vk" :href="p.vk" target="_blank" rel="noopener" class="btn sm">ВК ↗</a>' +
       '    <a v-if="p.gcId && gcUrl" :href="gcUrl" target="_blank" rel="noopener" class="btn sm">GetCourse ↗</a>' +
@@ -2484,6 +2485,7 @@
       '    <button v-if="p.email" class="btn sm" @click="copy(p.email)">✉ {{ p.email }}</button>' +
       '    <span v-if="p.source" class="small muted">пришёл из: {{ p.source }}</span>' +
       '  </div>' +
+      '  <button v-if="p.status === \'Не написали\'" class="btn sm" style="margin-top:10px" :disabled="busy" @click="openReason(\'skip\')" title="Например: прямо сейчас проходит курс">🚫 Не пишем — указать причину</button>' +
       '  <div class="field" style="margin-top:12px"><label>Куда пишу</label><div class="seg"><button v-for="c in dicts.channels" :key="c" class="btn sm" :class="{on: channel === c}" @click="setChannel(c)">{{ c }}</button></div></div>' +
       '  <div class="label">Шаблоны{{ p.segment ? " для «" + p.segment + "»" : "" }}</div>' +
       '  <div v-if="!shown.length" class="muted small">Для этого сегмента шаблонов нет — добавьте на вкладке «Шаблоны» задания.</div>' +
@@ -2503,12 +2505,14 @@
       '  <div class="field"><label>Комментарий</label><input class="input" v-model="note" @change="saveNote" placeholder="например: перезвонить после 15-го"></div>' +
       '  <div class="hint" v-if="p.sentAt">Написали {{ fmtDate(p.sentAt) }}<span v-if="p.channel"> в {{ p.channel }}</span><span v-if="p.repliedAt"> · ответ {{ fmtDate(p.repliedAt) }}</span></div>' +
       '  <button v-if="hasNext" class="btn lg" style="margin-top:12px;width:100%" @click="$emit(\'next\')">Следующий, кому не написали →</button>' +
-      '  <button v-if="p.status !== \'Удалён\'" class="btn danger sm" style="margin-top:12px" @click="removeOpen = true">Удалить из задания</button>' +
+      '  <button v-if="p.status !== \'Удалён\'" class="btn danger sm" style="margin-top:12px" @click="openReason(\'remove\')">Удалить из задания</button>' +
       '  <div v-if="removeOpen" class="overlay" @click.self="removeOpen = false"><div class="modal sm">' +
-      '    <div class="modal-head"><h2>Напишите причину</h2></div>' +
-      '    <div class="modal-body"><p class="small muted" style="margin-top:0">{{ p.name }} пропадёт из этого задания. Из CRM никто не удаляется.</p>' +
-      '      <textarea class="textarea" v-model="removeReason" ref="reason" placeholder="Например: не тот номер, уже учится, просил не писать"></textarea></div>' +
-      '    <div class="modal-foot"><button class="btn" @click="removeOpen = false">Отмена</button><button class="btn danger" :disabled="busy || !removeReason.trim()" @click="remove">Удалить из задания</button></div>' +
+      '    <div class="modal-head"><h2>{{ reasonMode === "skip" ? "Почему не пишем?" : "Напишите причину" }}</h2></div>' +
+      '    <div class="modal-body"><p class="small muted" style="margin-top:0" v-if="reasonMode === \'skip\'">{{ p.name }} останется в списке со статусом «Не пишем», причина будет видна в карточке. В цифры задания не входит.</p>' +
+      '      <p class="small muted" style="margin-top:0" v-else>{{ p.name }} пропадёт из этого задания. Из CRM никто не удаляется.</p>' +
+      '      <div class="seg" v-if="reasonMode === \'skip\'" style="margin-bottom:6px"><button v-for="r in skipReasons" :key="r" type="button" class="btn sm" @click="removeReason = r">{{ r }}</button></div>' +
+      '      <textarea class="textarea" v-model="removeReason" ref="reason" :placeholder="reasonMode === \'skip\' ? \'Например: прямо сейчас проходит ЯБ\' : \'Например: не тот номер, уже учится, просил не писать\'"></textarea></div>' +
+      '    <div class="modal-foot"><button class="btn" @click="removeOpen = false">Отмена</button><button class="btn" :class="reasonMode === \'skip\' ? \'primary\' : \'danger\'" :disabled="busy || !removeReason.trim()" @click="remove">{{ reasonMode === "skip" ? "Не пишем" : "Удалить из задания" }}</button></div>' +
       '  </div></div>' +
       '</div>',
     computed: {
@@ -2516,7 +2520,8 @@
       gcUrl: function () { var u = store.boot.settings.GC_USER_URL; return u ? fill(u, { id: this.p.gcId }) : ''; },
       own: function () { var sg = this.p.segment; return this.templates.filter(function (t) { return !t.segment || t.segment === sg; }); },
       others: function () { var sg = this.p.segment; return this.templates.filter(function (t) { return t.segment && t.segment !== sg; }); },
-      shown: function () { return this.showAll ? this.own.concat(this.others) : this.own; }
+      shown: function () { return this.showAll ? this.own.concat(this.others) : this.own; },
+      skipReasons: function () { return ['Прямо сейчас проходит курс', 'Уже купил', 'Уже учится у нас', 'Просил не писать']; }
     },
     watch: { p: function (v, old) { this.note = v.note || ''; if (!old || old.id !== v.id) this.copiedId = null; } },
     methods: {
@@ -2536,15 +2541,24 @@
           toast('Заведена сделка ' + np.crmDealId);
         }, function () { self.busy = false; });
       },
+      openReason: function (mode) {
+        var self = this;
+        this.reasonMode = mode;
+        this.removeReason = '';
+        this.removeOpen = true;
+        nextTick(function () { if (self.$refs.reason) self.$refs.reason.focus(); });
+      },
       remove: function () {
         var self = this;
+        var skip = this.reasonMode === 'skip';
         this.busy = true;
-        save(call('setPersonStatus', this.p.id, 'Удалён', this.removeReason.trim())).then(function (np) {
+        save(call('setPersonStatus', this.p.id, skip ? 'Не пишем' : 'Удалён', this.removeReason.trim())).then(function (np) {
           self.busy = false;
           self.removeOpen = false;
+          self.note = np.note || '';
           self.$emit('changed', np);
-          self.$emit('close');
-          toast('Убрали из задания');
+          if (!skip) self.$emit('close');
+          toast(skip ? 'Отмечено: не пишем' : 'Убрали из задания');
         }, function () { self.busy = false; });
       },
       /** Только копирует. «Написали» — отдельной кнопкой «Отправил», когда сообщение правда ушло. */
@@ -2658,7 +2672,8 @@
       '          <div v-if="!filtered.length" class="empty">Никого не найдено</div>' +
       '          <div v-for="p in filtered.slice(0, limit)" :key="p.id" class="prow" :class="{active: current && current.id === p.id}" @click="current = p">' +
       '            <div class="grow" style="min-width:0"><b>{{ p.name || "Без имени" }}</b> <span class="small muted">{{ p.segment }}</span>' +
-      '              <div class="small muted ellipsis">{{ [p.phone, p.email].filter(Boolean).join(" · ") }}<span v-if="p.clientId"> · в CRM</span></div></div>' +
+      '              <div class="small muted ellipsis">{{ [p.phone, p.email].filter(Boolean).join(" · ") }}<span v-if="p.clientId"> · в CRM</span></div>' +
+      '              <div class="small skip-reason ellipsis" v-if="p.status === \'Не пишем\' && p.note">не пишем: {{ p.note }}</div></div>' +
       '            <span class="pstatus" :class="cls(p.status)">{{ p.status }}</span>' +
       '          </div>' +
       '          <button v-if="filtered.length > limit" class="more" @click="limit += 200">Показать ещё {{ filtered.length - limit }}</button>' +
@@ -2772,9 +2787,11 @@
       if (ANS.indexOf(st) >= 0) x.answered++;
     };
     s.removed = 0;
+    s.skipped = 0;
     people.forEach(function (p) {
       var st = p.status || 'Не написали';
       if (st === 'Удалён') { s.removed++; return; }
+      if (st === 'Не пишем') { s.skipped++; return; }
       s.total++;
       if (st !== 'Не написали') s.sent++;
       if (ANS.indexOf(st) >= 0) s.answered++;

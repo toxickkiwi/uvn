@@ -353,7 +353,7 @@ function legacyItemView_(it) {
 /** Сегмент для тех, кто прошёл курс (в таблице Максима имя зелёное или «Прошёл курс — Да»). */
 var LEGACY_PASSED_SEGMENT = 'Прошли курс';
 
-var PERSON_RANK_ = { 'Не написали': 0, 'Написали': 1, 'Ответил': 2, 'Не интересно': 2, 'Купил': 3, 'Удалён': 2 };
+var PERSON_RANK_ = { 'Не написали': 0, 'Написали': 1, 'Ответил': 2, 'Не интересно': 2, 'Купил': 3, 'Удалён': 2, 'Не пишем': 2 };
 
 /** «[Имя], добрый день!» / «Имя, добрый день!» → «{Имя}, добрый день!». */
 function legacyTemplateText_(text) {
@@ -369,7 +369,7 @@ function legacyPersonStatus_(p) {
   var note = String(p.note || '').trim();
   if (/^да/i.test(String(p.replied || '').trim())) return { status: PERSON_STATUS.REPLIED, note: note };
   if (/^да$/i.test(sent)) return { status: PERSON_STATUS.SENT, note: note };
-  if (/^нет$/i.test(sent)) return { status: PERSON_STATUS.REMOVED, note: note || 'Не писали (отметка в таблице)' };
+  if (/^нет$/i.test(sent)) return { status: PERSON_STATUS.SKIP, note: note || 'Не писали (отметка в таблице)' };
   if (sent) return { status: PERSON_STATUS.SENT, note: [sent, note].filter(Boolean).join('; ') };
   return { status: PERSON_STATUS.TODO, note: note };
 }
@@ -447,7 +447,10 @@ function svcLegacyTask_(user, input, apply) {
         var cur = have.status || PERSON_STATUS.TODO;
         var segFix = raw.passed && String(have.segment || '') !== LEGACY_PASSED_SEGMENT;
         if (segFix) data.segmentFix = true;
-        if (segFix || (PERSON_RANK_[data.status] || 0) > (PERSON_RANK_[cur] || 0) || (data.note && !String(have.note || '').trim())) {
+        // Раньше «Написал — Нет» переносилось как «Удалён»; теперь это «Не пишем».
+        var toSkip = cur === PERSON_STATUS.REMOVED && data.status === PERSON_STATUS.SKIP;
+        if (toSkip) data.toSkip = true;
+        if (segFix || toSkip || (PERSON_RANK_[data.status] || 0) > (PERSON_RANK_[cur] || 0) || (data.note && !String(have.note || '').trim())) {
           stat.update++;
           updates.push({ row: have._row, data: data, cur: cur, note: have.note });
         } else stat.same++;
@@ -493,7 +496,7 @@ function svcLegacyTask_(user, input, apply) {
     var now = now_();
     updates.forEach(function (u) {
       var patch = { updatedAt: now };
-      if ((PERSON_RANK_[u.data.status] || 0) > (PERSON_RANK_[u.cur] || 0)) {
+      if (u.data.toSkip || (PERSON_RANK_[u.data.status] || 0) > (PERSON_RANK_[u.cur] || 0)) {
         patch.status = u.data.status;
         if (u.data.sentAt) patch.sentAt = u.data.sentAt;
         if (u.data.channel) patch.channel = u.data.channel;

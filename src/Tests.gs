@@ -439,7 +439,7 @@ function selfTestCases_() {
       var t = svcGetTask_(u, ap.taskId);
       assertEq_(t.templates.map(function (x) { return x.text; }), ['{Имя}, добрый день! Вариант один', '{Имя}, добрый день! Вариант два'], 'шаблоны');
       var st = t.stats;
-      assertEq_([st.total, st.sent, st.answered, st.removed], [3, 2, 1, 1], 'статистика');
+      assertEq_([st.total, st.sent, st.answered, st.skipped], [3, 2, 1, 1], 'статистика');
       var anna = t.people.filter(function (p) { return p.firstName === 'Анна'; })[0];
       assertEq_([anna.status, anna.channel], ['Ответил', 'Почта'], 'ответ и канал');
       var ir = t.people.filter(function (p) { return p.firstName === 'Ирина'; })[0];
@@ -447,7 +447,7 @@ function selfTestCases_() {
       assertEq_(t.task.segments, ['Все', 'Прошли курс'], 'сегменты задания');
       assertEq_(t.templates.map(function (x) { return x.segment; }), ['', ''], 'варианты текста — для всех');
       var ol = t.people.filter(function (p) { return p.firstName === 'Олеся'; })[0];
-      assertEq_([ol.status, ol.note], ['Удалён', 'Уже на БК'], 'не писали — убрана с причиной');
+      assertEq_([ol.status, ol.note], ['Не пишем', 'Уже на БК'], 'не писали — «Не пишем» с причиной');
       input.people[3].sent = 'Да';
       var pv2 = svcLegacyTask_(u, input, false);
       assertEq_([pv2.isNew, pv2.add, pv2.update, pv2.templatesNew], [false, 0, 1, 0], 'повтор: обновится только Вера');
@@ -514,6 +514,11 @@ function selfTestCases_() {
       var crm = svcPersonToCrm_(u, z.id);
       if (!crm.crmDealId) throw new Error('сделка не заведена');
       assertEq_(crm.status, 'Не написали', 'статус не меняется');
+      assertThrows_(function () { svcSetPersonStatus_(u, z.id, 'Не пишем', ' '); }, 'note', '«Не пишем» без причины');
+      var sk = svcSetPersonStatus_(u, z.id, 'Не пишем', 'Прямо сейчас проходит ЯБ');
+      assertEq_([sk.status, sk.note], ['Не пишем', 'Прямо сейчас проходит ЯБ'], 'не пишем с причиной');
+      var st2 = svcGetTask_(u, task.id).stats;
+      assertEq_([st2.skipped, st2.total], [1, 2], '«Не пишем» не в цифрах');
     }],
     ['Шаблоны: категория обязательна; имя в приветствия, кроме «как к вам обращаться»', function () {
       assertThrows_(function () { svcSaveTemplate_(u, { title: 'x', text: 'y' }); }, 'situation');

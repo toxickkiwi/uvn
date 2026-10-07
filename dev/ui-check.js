@@ -305,6 +305,22 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.click('.modal .btn.danger');
     await p.waitForSelector('.prow:has-text("Ольга")', { state: 'detached', timeout: 15000 });
   });
+  await step('Задания: «Не пишем» с причиной — причина видна в списке и в карточке', async () => {
+    // Ольгу удалили из задания шагом выше — возвращаем.
+    await p.selectOption('select:has(option:text-is("Удалён"))', 'Удалён');
+    await p.click('.prow:has-text("Ольга")');
+    await p.click('.person-panel >> text=Вернуть в задание');
+    await p.waitForSelector('.person-panel >> text=Не пишем — указать причину', { timeout: 15000 });
+    await p.selectOption('select:has(option:text-is("Удалён"))', '');
+    await p.click('.person-panel >> text=Не пишем — указать причину');
+    await p.click('.modal >> text=Прямо сейчас проходит курс');
+    await p.click('.modal .modal-foot .btn.primary');
+    await p.waitForSelector('.person-panel .skip-banner:has-text("Прямо сейчас проходит курс")', { timeout: 15000 });
+    await p.waitForSelector('.prow:has-text("Ольга") .skip-reason:has-text("Прямо сейчас проходит курс")');
+    await p.waitForSelector('.prow:has-text("Ольга") .pstatus:text-is("Не пишем")');
+    const prog = await p.locator('.tprog').first().innerText();
+    if (!/не пишем 1/.test(prog)) throw new Error('прогресс: ' + prog);
+  });
   await step('Сообщения: категории, правка, имя в приветствия', async () => {
     await p.click('.topbar .tab:has-text("Сообщения")');
     await p.waitForSelector('.msg-group', { timeout: 15000 });

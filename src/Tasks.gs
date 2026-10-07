@@ -14,9 +14,11 @@ var PERSON_STATUS = {
   REPLIED: 'Ответил',
   NO: 'Не интересно',
   BOUGHT: 'Купил',
-  REMOVED: 'Удалён'
+  REMOVED: 'Удалён',
+  // Решили не писать (например, человек прямо сейчас учится) — с причиной; в цифры не входит.
+  SKIP: 'Не пишем'
 };
-var PERSON_STATUSES = [PERSON_STATUS.TODO, PERSON_STATUS.SENT, PERSON_STATUS.REPLIED, PERSON_STATUS.NO, PERSON_STATUS.BOUGHT, PERSON_STATUS.REMOVED];
+var PERSON_STATUSES = [PERSON_STATUS.TODO, PERSON_STATUS.SENT, PERSON_STATUS.REPLIED, PERSON_STATUS.NO, PERSON_STATUS.BOUGHT, PERSON_STATUS.REMOVED, PERSON_STATUS.SKIP];
 /** Статусы, которые считаются ответом человека. */
 var ANSWERED_STATUSES = [PERSON_STATUS.REPLIED, PERSON_STATUS.NO, PERSON_STATUS.BOUGHT];
 
@@ -66,10 +68,13 @@ function taskStats_(people) {
     if (p.status === PERSON_STATUS.BOUGHT) x.bought++;
   };
   s.removed = 0;
+  s.skipped = 0;
   people.forEach(function (raw) {
     var p = { status: raw.status || PERSON_STATUS.TODO };
     // Удалённые из задания не входят в цифры: их убрали из списка как неподходящих.
     if (p.status === PERSON_STATUS.REMOVED) { s.removed++; return; }
+    // «Не пишем» — в списке остаются, но не входят в «людей» и конверсию.
+    if (p.status === PERSON_STATUS.SKIP) { s.skipped++; return; }
     s.total++;
     if (p.status !== PERSON_STATUS.TODO) s.sent++;
     if (ANSWERED_STATUSES.indexOf(p.status) >= 0) s.answered++;
@@ -356,6 +361,7 @@ function svcMarkPersonSent_(user, id, templateId, channel) {
 function svcSetPersonStatus_(user, id, status, note) {
   if (PERSON_STATUSES.indexOf(status) < 0) throw userError_('Неизвестный статус.');
   if (status === PERSON_STATUS.REMOVED && !String(note || '').trim()) throw userError_('Напишите причину, почему убираете человека из задания.', 'note');
+  if (status === PERSON_STATUS.SKIP && !String(note || '').trim()) throw userError_('Напишите причину, почему не пишем.', 'note');
   var p0 = (function () { return personRow_(new Table_(SHEET.PEOPLE), id); })();
   var dealId = String(p0.dealId || '');
   var clientId = String(p0.clientId || '');
@@ -371,6 +377,7 @@ function svcSetPersonStatus_(user, id, status, note) {
     if (ANSWERED_STATUSES.indexOf(status) >= 0 && !isDate_(p.repliedAt)) patch.repliedAt = now_();
     if (status === PERSON_STATUS.TODO) { patch.sentAt = ''; patch.templateId = ''; patch.repliedAt = ''; }
     if (status === PERSON_STATUS.REMOVED) patch.repliedAt = p.repliedAt;
+    if (status === PERSON_STATUS.SKIP) { patch.sentAt = ''; patch.templateId = ''; patch.repliedAt = ''; }
     if (note !== undefined && note !== null) patch.note = String(note).trim();
     return personView_(pt.update(p._row, patch));
   });
