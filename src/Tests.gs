@@ -56,6 +56,7 @@ function createTestSheets_(ss) {
   var put = function (name, rows) {
     var sh = ss.insertSheet(TEST_PREFIX + name);
     var width = rows[0].length;
+    if (width > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
     sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
       var line = r.slice();
       while (line.length < width) line.push('');
@@ -544,6 +545,41 @@ function selfTestCases_() {
       var sep = svcGetCalendar_(u, '2026-09');
       assertEq_(sep.month, '2026-09', 'другой месяц');
       if (sep.total.created < 1) throw new Error('сентябрь пуст');
+    }],
+    ['Почистить: дубли по телефону, заказу, имени; «разные люди»; объединение', function () {
+      var mk = function (client, deal) { return svcCreateDeal_(u, { client: client, deal: Object.assign({ channel: 'ВК', request: 'дубли' }, deal || {}), force: true }); };
+      var a = mk({ name: 'Дубль Телефонов', phone: '89170001122' });
+      var b = mk({ name: 'Дубль Т.', phone: '+7 917 000-11-22', nick: 'dubl.t' });
+      var c = mk({ name: 'Заказ Первый', email: 'z1@mail.ru' }, { orderNo: '50001' });
+      var d = mk({ name: 'Заказ Второй', email: 'z2@mail.ru' }, { orderNo: '50001' });
+      var e = mk({ name: 'Полное Имя', email: 'p1@mail.ru' });
+      var f = mk({ name: 'полное  имя', email: 'p2@mail.ru' });
+      var g1 = mk({ name: 'Зарина', dialogUrl: 'https://vk.com/zarina1' }, { channel: 'Макс' });
+      var g2 = mk({ name: 'Зарина', email: 'zar@mail.ru' }, { channel: 'Макс' });
+      var ctab = new Table_(SHEET.CLIENTS);
+      ctab.update(ctab.find('id', g2.clientId)._row, { email: '' }); // как после импорта: клиент без контактов
+      var h1 = mk({ name: 'Эльвира', nick: 'elv.one' }, { channel: 'Макс' });
+      var h2 = mk({ name: 'Эльвира', nick: 'elv.two' }, { channel: 'Макс' });
+      var groups = svcListDuplicates_(u).groups;
+      var groupOf = function (id) { return groups.filter(function (x) { return x.clients.some(function (cl) { return cl.id === id; }); })[0]; };
+      var ga = groupOf(a.clientId);
+      assertEq_([!!ga, ga && ga.sure, ga && ga.clients.length], [true, true, 2], 'телефон');
+      if (groupOf(c.clientId) !== groupOf(d.clientId) || !groupOf(c.clientId).sure) throw new Error('одинаковый заказ не найден');
+      var ge = groupOf(e.clientId);
+      if (!ge || ge.sure || groupOf(f.clientId) !== ge) throw new Error('одинаковые имя и фамилия');
+      if (!groupOf(g1.clientId) || groupOf(g1.clientId) !== groupOf(g2.clientId)) throw new Error('одно имя, канал, рядом по датам');
+      if (groupOf(h1.clientId)) throw new Error('разные ники — не дубль');
+      svcMarkNotDuplicate_(u, [e.clientId, f.clientId]);
+      groups = svcListDuplicates_(u).groups;
+      if (groupOf(e.clientId)) throw new Error('«разные люди» снова показаны');
+      var res = svcMergeClients_(u, a.clientId, [b.clientId]);
+      assertEq_([res.movedDeals, res.merged], [1, [b.clientId]], 'объединение');
+      var card = svcGetDeal_(u, b.dealId);
+      assertEq_([card.client.id, card.client.nick, card.client.name], [a.clientId, 'dubl.t', 'Дубль Телефонов'], 'сделка и ник у главного');
+      if (!card.touches.some(function (t) { return /Объединён с клиентом/.test(t.text); })) throw new Error('нет заметки об объединении');
+      if (new Table_(SHEET.CLIENTS).find('id', b.clientId)) throw new Error('дубль не удалён');
+      groups = svcListDuplicates_(u).groups;
+      if (groupOf(a.clientId)) throw new Error('после объединения дубль остался');
     }],
     ['«Сегодня»: просрочено, на сегодня, без ответа, счётчики', function () {
       var t = svcGetToday_(u);

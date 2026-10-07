@@ -139,6 +139,8 @@ function planLegacyDeals_(rows, data) {
     var paid = amount > 0 || /^да/i.test(String(r.paid || '').trim());
     var color = legacyColor_(r.planColor) || legacyColor_(r.rowColor);
     var contact = legacyContact_(r.link);
+    // Ссылка на заказ GetCourse: из «Заказ» или из «ФИ», если там заказ, а не профиль.
+    var orderUrl = String(r.orderLink || '').trim() || (/\/sales\/control\/deal\//i.test(String(r.link || '')) ? String(r.link).trim() : '');
     var payDay = r.payDate ? parseTaskDate_(r.payDate, '00:00') : (isDate_(created) ? created : today);
     // Касание о плане: на дату второго контакта (если она не в будущем), иначе на дату обращения.
     var noteAt = isDate_(second) && second <= data.now ? mskAt_(mskDayStart_(second, 0), '12:00') : (isDate_(created) ? mskAt_(created, '12:00') : data.now);
@@ -187,7 +189,7 @@ function planLegacyDeals_(rows, data) {
       var newDeal = {
         potok: POTOK.INBOUND, channel: channel, createdAt: created, request: legacyText_(r.request) || '—',
         course: '', tariff: '', amount: paid ? (amount || '') : '', payMethod: paid ? 'Полная' : '',
-        orderNo: legacyText_(r.orderNo).replace(/\.0+$/, ''), paidAt: paid ? payDay : '',
+        orderNo: legacyText_(r.orderNo).replace(/\.0+$/, ''), orderUrl: orderUrl, paidAt: paid ? payDay : '',
         stage: stage, lostReason: stage === STAGE.LOST ? 'Не отвечает' : '',
         nextTask: isOpenStage_(stage) ? (plan ? plan.split('\n')[0].slice(0, 120) : 'Написать повторно') : '',
         taskAt: isOpenStage_(stage) ? (isDate_(second) ? second : mskAt_(created, defTime)) : '',
@@ -258,6 +260,7 @@ function planLegacyDeals_(rows, data) {
         item.changes.push('задача на ' + legacyDdMm_(second));
       }
     }
+    if (orderUrl && !legacyText_(deal.orderUrl)) { patch.orderUrl = orderUrl; item.changes.push('ссылка на заказ GetCourse'); }
     var known = (touchesByDeal[String(deal.id)] || []).map(function (t) { return t.text; }).concat([deal.nextTask, deal.request]);
     var touchesNew = [];
     if (plan && !known.some(function (t) { return legacySame_(t, plan); })) {

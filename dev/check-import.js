@@ -52,4 +52,7 @@ parsed.tasks.forEach((t) => {
 });
 const today = ok(sim.ctx.getToday());
 console.log('Сегодня после переноса:', { overdue: today.overdue.length, today: today.today.length, fresh: today.fresh.length, monthCreated: today.counters.monthCreated, monthPaid: today.counters.monthPaid });
+const dups = ok(sim.ctx.listDuplicates()).groups;
+console.log('Почистить: групп дублей', dups.length);
+dups.forEach((g) => console.log('  ', g.sure ? 'точно   ' : 'возможно', g.clients.map((c) => c.id + ' ' + c.name).join(' / '), '—', g.reasons.join('; ')));
 console.log('\nПеренос проверен');

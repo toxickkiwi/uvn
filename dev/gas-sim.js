@@ -113,6 +113,7 @@ class Sheet {
   getMaxRows() { return this.maxRows; }
   getMaxColumns() { return this.maxCols; }
   insertRowsAfter(_, n) { this.maxRows += n; }
+  deleteRow(n) { this.grid.splice(n - 1, 1); this.maxRows--; }
   insertColumnsAfter(_, n) { this.maxCols += n; }
   getFrozenRows() { return this.frozen; }
   getConditionalFormatRules() { return (this.cf || []).slice(); }

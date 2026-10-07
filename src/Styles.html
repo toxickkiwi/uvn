@@ -265,6 +265,17 @@
     .cal-main b { font-size: 15px; }
     .cal-day .rgrid { grid-template-columns: minmax(0, 1fr); }
   }
+  .who-hint { font-size: 12px; color: #6b4fa0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 220px; margin-left: 6px; }
+  .bcard .who-hint { margin-left: 0; max-width: none; display: block; }
+  .btn.warn { background: #fff4c2; border-color: #e8d48a; color: #7a5b00; }
+  .dup-group { display: flex; flex-direction: column; gap: 8px; }
+  .dup-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+  .dup-card { border: 1px solid var(--line, #e3e6ea); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; cursor: pointer; min-width: 0; }
+  .dup-card.main { border-color: #2563eb; background: #f3f7ff; }
+  .dup-deals { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+  .dup-deal { color: inherit; }
+  .dup-pick { color: #2563eb; cursor: pointer; }
+  .dup-pick.main-mark { color: #1f7a3a; cursor: default; }
   .legacy-tbl th, .legacy-tbl td { vertical-align: top; text-align: left; }
   .legacy-tbl tr.dim td { opacity: .5; }
   .kind { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 9px; background: #eef1f4; color: var(--muted, #667); margin-bottom: 2px; }

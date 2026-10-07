@@ -32,7 +32,8 @@ SCHEMA[SHEET.CLIENTS] = {
   check: 'Проверить',
   createdAt: 'Создан',
   author: 'Автор',
-  otherLinks: 'Другие ссылки'
+  otherLinks: 'Другие ссылки',
+  notDup: 'Не дубль'
 };
 SCHEMA[SHEET.DEALS] = {
   id: 'ID',
@@ -60,7 +61,8 @@ SCHEMA[SHEET.DEALS] = {
   priorWhere: 'Где был контакт',
   priorWhen: 'Когда был контакт',
   priorNote: 'Комментарий о контакте',
-  score: 'Оценка'
+  score: 'Оценка',
+  orderUrl: 'Ссылка на заказ'
 };
 SCHEMA[SHEET.TOUCHES] = {
   dealId: 'ID сделки',
@@ -145,7 +147,7 @@ SCHEMA[SHEET.PEOPLE] = {
  */
 var OPTIONAL_COLUMNS = {
   prospect: true, otherLinks: true, channel: true, taskId: true, segment: true,
-  priorContact: true, priorWhere: true, priorWhen: true, priorNote: true, score: true
+  priorContact: true, priorWhere: true, priorWhen: true, priorNote: true, score: true, notDup: true, orderUrl: true
 };
 
 /** Поля, в которых лежат даты (в таблице — настоящие Date, клиенту — ISO-строки). */

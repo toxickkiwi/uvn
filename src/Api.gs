@@ -84,6 +84,7 @@ function dealView_(d, client, stats) {
     v.dialogUrl = client ? String(client.dialogUrl || '') : '';
     v.gcId = client && client.gcId !== '' ? String(client.gcId) : '';
     v.clientCheck = client ? String(client.check || '') : '';
+    v.contactHint = contactHint_(client);
   }
   if (stats) {
     // Без stats (ответ на запись) этих полей нет — клиент оставляет свои значения.
@@ -96,6 +97,27 @@ function dealView_(d, client, stats) {
   v.score = normScore_(d.score);
   v.color = dealColor_(d);
   return v;
+}
+
+/**
+ * Короткая подпись к имени, чтобы различать одинаковые имена: @ник, адрес диалога, почта,
+ * последние цифры телефона или ID GetCourse — что есть.
+ */
+function contactHint_(c) {
+  if (!c) return '';
+  var nick = normNick_(c.nick);
+  if (nick) return '@' + nick;
+  var url = String(c.dialogUrl || '').trim();
+  if (url && !gcIdFromUrl_(url) && !/instagram\.com\/direct\//i.test(url)) {
+    var short = urlKey_(url).replace(/^(www\.|m\.)/, '');
+    return short.length > 28 ? short.slice(0, 27) + '…' : short;
+  }
+  if (String(c.email || '').trim()) return String(c.email).trim();
+  var ph = normPhone_(c.phone);
+  if (ph.length >= 4) return 'тел. …' + ph.slice(-4);
+  if (String(c.gcId || '').trim()) return 'GC ' + String(c.gcId);
+  if (url) return 'диалог в Инстаграм';
+  return '';
 }
 
 function touchView_(t, usersByEmail) {
@@ -129,7 +151,7 @@ function svcGetToday_(user) {
   var lists = { created: [], touches: [], paid: [] };
   var brief = function (d) {
     var c = clients[String(d.clientId)];
-    return { id: d.id, clientName: c ? String(c.name) : '', channel: d.channel, stage: d.stage, course: d.course, amount: d.amount, request: d.request };
+    return { id: d.id, clientName: c ? String(c.name) : '', contactHint: contactHint_(c), channel: d.channel, stage: d.stage, course: d.course, amount: d.amount, request: d.request };
   };
   var dealsById = {};
   var monthStart = mskMonthStart_(now, 0);
@@ -162,7 +184,7 @@ function svcGetToday_(user) {
     if (t.type !== TOUCH.STAGE && isDate_(t.date) && t.date >= dayStart && t.date < dayEnd) {
       counters.touches++;
       var d = dealsById[String(t.dealId)];
-      lists.touches.push({ id: String(t.dealId), clientName: d ? brief(d).clientName : '', type: t.type, channel: String(t.channel || (d && d.channel) || ''),
+      lists.touches.push({ id: String(t.dealId), clientName: d ? brief(d).clientName : '', contactHint: d ? brief(d).contactHint : '', type: t.type, channel: String(t.channel || (d && d.channel) || ''),
         time: t.date.toISOString(), text: String(t.text || '').slice(0, 120) });
     }
   });
@@ -414,7 +436,7 @@ function settingsWithDefaults_() {
 /* ---------- Изменение сделки ---------- */
 
 var DEAL_EDITABLE = ['potok', 'channel', 'request', 'course', 'tariff', 'amount', 'payMethod', 'orderNo',
-  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt', 'prospect', 'score',
+  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt', 'prospect', 'score', 'orderUrl',
   'priorContact', 'priorWhere', 'priorWhen', 'priorNote'];
 
 /**
@@ -461,7 +483,7 @@ function svcUpdateDeal_(user, id, patch) {
       if (isDate_(clean.priorWhen) && clean.priorWhen.getTime() > now_().getTime()) throw userError_('Дата прошлого контакта не может быть в будущем.', 'priorWhen');
     }
     if ('priorContact' in clean) clean.priorContact = normPrior_(clean.priorContact);
-    ['nextTask', 'request', 'course', 'tariff', 'orderNo'].forEach(function (f) {
+    ['nextTask', 'request', 'course', 'tariff', 'orderNo', 'orderUrl'].forEach(function (f) {
       if (f in clean) clean[f] = String(clean[f] || '').trim();
     });
     var res = saveDeal_(user, dealsT, touchesT, before, clean, now_());
@@ -640,7 +662,7 @@ function svcGetCalendarDay_(user, dayStr) {
   var byId = {};
   var brief = function (d) {
     var c = clients[String(d.clientId)];
-    return { id: d.id, clientName: c ? String(c.name) : '', channel: d.channel, potok: d.potok, stage: d.stage, course: d.course, amount: d.amount, request: d.request, score: normScore_(d.score) };
+    return { id: d.id, clientName: c ? String(c.name) : '', contactHint: contactHint_(c), channel: d.channel, potok: d.potok, stage: d.stage, course: d.course, amount: d.amount, request: d.request, score: normScore_(d.score) };
   };
   var out = { day: dayStr, created: [], touches: [], paid: [] };
   deals.forEach(function (d) {
@@ -651,7 +673,7 @@ function svcGetCalendarDay_(user, dayStr) {
   new Table_(SHEET.TOUCHES).all().forEach(function (t) {
     var d = byId[String(t.dealId)];
     if (!d || t.type === TOUCH.STAGE || !isDate_(t.date) || t.date < dayStart || t.date >= dayEnd) return;
-    out.touches.push({ id: String(t.dealId), clientName: brief(d).clientName, type: t.type, channel: String(t.channel || d.channel || ''),
+    out.touches.push({ id: String(t.dealId), clientName: brief(d).clientName, contactHint: brief(d).contactHint, type: t.type, channel: String(t.channel || d.channel || ''),
       time: t.date.toISOString(), text: String(t.text || '').slice(0, 160) });
   });
   ['created', 'touches'].forEach(function (k) { out[k].sort(function (a, b) { return a.time.localeCompare(b.time); }); });

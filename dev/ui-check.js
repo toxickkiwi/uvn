@@ -342,6 +342,12 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.waitForSelector('.deal-grid', { timeout: 15000 });
     console.log('    2 октября: обращений', n);
   });
+  await step('Почистить: список дублей открывается с «Сегодня»', async () => {
+    await p.click('.topbar .tab:has-text("Сегодня")');
+    await p.click('a:has-text("Почистить")');
+    await p.waitForSelector('.dup-group, .empty-state', { timeout: 15000 });
+    console.log('    групп дублей:', await p.locator('.dup-group').count());
+  });
   await p.screenshot({ path: (process.argv[3] || '.') + '/ui-check.png' });
   console.log('Ошибки в консоли:', errs.length ? errs : 'нет');
   await b.close();

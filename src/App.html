@@ -304,7 +304,7 @@
     if (m) return { name: 'deal', id: m[1] };
     var t = /^task\/([\w-]+)/.exec(h);
     if (t) return { name: 'task', id: t[1] };
-    if (['board', 'report', 'guide', 'tasks', 'messages', 'import', 'calendar'].indexOf(h) >= 0) return { name: h, id: '' };
+    if (['board', 'report', 'guide', 'tasks', 'messages', 'import', 'calendar', 'clean'].indexOf(h) >= 0) return { name: h, id: '' };
     return { name: 'today', id: '' };
   }
   function go(hash) {
@@ -353,7 +353,7 @@
       '  <div class="drow-main">' +
       '    <div class="drow-title">' +
       '      <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
-      '      <span class="drow-name">{{ d.clientName || "Без имени" }}</span>' +
+      '      <span class="drow-name">{{ d.clientName || "Без имени" }}</span><span v-if="d.contactHint" class="who-hint">{{ d.contactHint }}</span>' +
       '      <span class="chip" :class="\'ch-\' + d.channel">{{ chLabel(d.channel) }}</span>' +
       '      <span v-if="d.score" class="score" :class="\'s\' + d.score" :title="scoreTitle(d.score)">{{ d.score }}</span>' +
       '      <span v-if="d.course" class="muted">{{ d.course }}</span>' +
@@ -405,7 +405,8 @@
     template:
       '<div>' +
       '  <div class="page-head"><h1>Сегодня</h1><span class="muted">{{ todayLabel }}</span>' +
-      '    <button class="btn ghost sm" style="margin-left:auto" @click="load" :disabled="loading">Обновить</button></div>' +
+      '    <a class="btn sm" :class="{warn: cleanDue}" style="margin-left:auto" href="#clean" @click.prevent="go(\'clean\')" :title="cleanDue ? \'Дубли не проверяли больше недели\' : \'Найти дубли клиентов\'">🧹 Почистить<span v-if="cleanDue"> — пора</span></a>' +
+      '    <button class="btn ghost sm" @click="load" :disabled="loading">Обновить</button></div>' +
       '  <div v-if="loading && !data" class="loading">Загружаю…</div>' +
       '  <div v-else-if="error" class="panel">{{ error }}</div>' +
       '  <template v-else-if="data">' +
@@ -421,7 +422,7 @@
       '      <div class="modal-head"><h2>{{ list.title }}</h2><button class="btn ghost sm" style="margin-left:auto" @click="list = null">✕</button></div>' +
       '      <div class="modal-body"><div v-if="!list.items.length" class="muted">Сегодня пока нет.</div>' +
       '        <a v-for="(x, i) in list.items" :key="i" href="#" class="list-item" @click.prevent="list = null; open(x)">' +
-      '          <div class="row"><b class="grow">{{ x.clientName || x.id }}</b><span class="faint small">{{ x.time ? fmtWhen(x.time) : "" }}</span></div>' +
+      '          <div class="row"><b>{{ x.clientName || x.id }}</b><span class="who-hint grow">{{ x.contactHint }}</span><span class="faint small">{{ x.time ? fmtWhen(x.time) : "" }}</span></div>' +
       '          <div class="small muted">{{ [x.type, x.channel, x.course, x.amount ? rub(x.amount) : ""].filter(Boolean).join(" · ") }}<span v-if="x.text || x.request"> — {{ x.text || x.request }}</span></div></a>' +
       '      </div></div></div>' +
       '    <div class="out-toggle small" v-if="outCount || showOut"><span class="muted" v-if="!showOut">Показаны только входящие. Исходящих (вы написали первым) скрыто: {{ outCount }}.</span><span class="muted" v-else>Показаны и исходящие.</span>' +
@@ -441,6 +442,7 @@
       '  </template>' +
       '</div>',
     computed: {
+      cleanDue: function () { var t = readPref('cleanAt', 0); return !t || Date.now() - t > 7 * 86400000; },
       view: function () {
         var d = this.data;
         var all = this.showOut;
@@ -479,6 +481,7 @@
     },
     unmounted: function () { if (this._v) this._v(); },
     methods: {
+      go: go,
       setOut: function (v) { this.showOut = v; writePref('todayOut', v); },
       rub: rub,
       fmtWhen: fmtWhen,
@@ -766,7 +769,8 @@
       '        <button v-for="k in [\'1\', \'2\', \'3\']" :key="k" class="btn sm" :class="[\'s\' + k, {on: deal.score === k}]" :title="k + \' — \' + scoreHints[k]" @click="saveDeal(\'score\', deal.score === k ? \'\' : k)">{{ k }}<span class="hide-mobile"> {{ scoreLabels[k].toLowerCase() }}</span></button></span>' +
       '      <span class="head-links"><a v-if="link" class="btn sm primary" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
       '        <a v-if="gc && gc.dialog" class="btn sm" :class="{primary: !link}" :href="gc.dialog" target="_blank" rel="noopener">Диалог GetCourse ↗</a>' +
-      '        <a v-if="gc && gc.profile" class="btn sm" :class="{primary: !link && !gc.dialog}" :href="gc.profile" target="_blank" rel="noopener" title="Профиль в GetCourse — там вся переписка">GetCourse ↗</a></span>' +
+      '        <a v-if="gc && gc.profile" class="btn sm" :class="{primary: !link && !gc.dialog}" :href="gc.profile" target="_blank" rel="noopener" title="Профиль в GetCourse — там вся переписка">GetCourse ↗</a>' +
+      '        <a v-if="deal.orderUrl" class="btn sm" :class="{primary: !link && !gc}" :href="deal.orderUrl" target="_blank" rel="noopener" title="Заказ в GetCourse — из него видно покупателя">Заказ GC ↗</a></span>' +
       '    </div>' +
       '    <div v-if="client && client.check" class="banner"><b>Клиент:</b><span class="grow">{{ client.check }}</span><button class="btn sm" @click="checked(\'client\')">Проверено</button></div>' +
       '    <div v-if="deal.check" class="banner"><b>Сделка:</b><span class="grow">{{ deal.check }}</span><button class="btn sm" @click="checked(\'deal\')">Проверено</button></div>' +
@@ -836,7 +840,9 @@
       '          <div class="field grow"><label>Способ оплаты</label><select class="select" :class="err(\'payMethod\')" :value="deal.payMethod" @change="saveDeal(\'payMethod\', $event.target.value)"><option value="">—</option><option v-for="s in dicts.payMethods" :key="s">{{ s }}</option></select></div>' +
       '        </div>' +
       '        <div class="field"><label>Номер заказа GetCourse</label><input class="input" :class="err(\'orderNo\')" v-model="edit.orderNo" @change="saveIfChanged(\'orderNo\')">' +
-      '          <div class="inline-links" v-if="deal.orderNo && settings.GC_ORDER_URL"><a :href="fill(settings.GC_ORDER_URL, {id: deal.orderNo})" target="_blank" rel="noopener">заказ в GetCourse ↗</a></div></div>' +
+      '          <div class="inline-links" v-if="deal.orderNo && settings.GC_ORDER_URL && !deal.orderUrl"><a :href="fill(settings.GC_ORDER_URL, {id: deal.orderNo})" target="_blank" rel="noopener">заказ в GetCourse ↗</a></div></div>' +
+      '        <div class="field"><label>Ссылка на заказ GetCourse</label><input class="input" :class="err(\'orderUrl\')" v-model="edit.orderUrl" @change="saveIfChanged(\'orderUrl\')" placeholder="https://uvnschool.ru/sales/control/deal/update/id/…">' +
+      '          <div class="inline-links" v-if="deal.orderUrl"><a :href="deal.orderUrl" target="_blank" rel="noopener">заказ в GetCourse ↗</a></div></div>' +
       '        <div class="field" v-if="deal.stage === \'Оплачено\'"><label>Дата оплаты</label><input class="input" :class="err(\'paidAt\')" type="date" :value="toInputDate(deal.paidAt)" @change="saveDeal(\'paidAt\', $event.target.value)"></div>' +
       '        <div class="field" v-if="deal.stage === \'Отказ\'"><label>Причина отказа</label><select class="select" :class="err(\'lostReason\')" :value="deal.lostReason" @change="saveDeal(\'lostReason\', $event.target.value)"><option v-for="s in dicts.lostReasons" :key="s">{{ s }}</option></select></div>' +
       '        <template v-if="isOpen">' +
@@ -966,7 +972,7 @@
       },
       resetEdit: function () {
         var d = this.deal;
-        this.edit = { request: d.request, course: d.course, tariff: d.tariff, amount: d.amount, orderNo: d.orderNo, nextTask: d.nextTask, priorNote: d.priorNote };
+        this.edit = { request: d.request, course: d.course, tariff: d.tariff, amount: d.amount, orderNo: d.orderNo, orderUrl: d.orderUrl || '', nextTask: d.nextTask, priorNote: d.priorNote };
       },
       applyResult: function (res) {
         this.deal = Object.assign({}, this.deal, res.deal);
@@ -1288,7 +1294,7 @@
       '    <div v-else-if="!results.length" class="empty">Ничего не найдено</div>' +
       '    <a v-for="(d, i) in results" :key="d.id" class="search-item" :class="{hl: i === hl}" @mousedown.prevent="pick(d)">' +
       '      <div class="row"><b class="grow">{{ d.clientName }}</b><span class="stage" :class="stageClass(d.stage)">{{ d.stage }}</span></div>' +
-      '      <div class="muted" style="font-size:12px">{{ d.id }} · {{ d.channel }}{{ d.course ? " · " + d.course : "" }}{{ d.nick ? " · @" + d.nick : "" }}</div>' +
+      '      <div class="muted" style="font-size:12px">{{ d.id }} · {{ d.channel }}{{ d.course ? " · " + d.course : "" }}{{ d.contactHint ? " · " + d.contactHint : "" }}</div>' +
       '    </a>' +
       '  </div>' +
       '</div>',
@@ -1335,6 +1341,7 @@
       '    <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
       '    <span v-if="d.score" class="score" :class="\'s\' + d.score" :title="scoreTitle(d.score)">{{ d.score }}</span>' +
       '    <span class="chip" :class="\'ch-\' + d.channel">{{ chLabel(d.channel) }}</span></div>' +
+      '  <div class="who-hint ellipsis" v-if="d.contactHint">{{ d.contactHint }}</div>' +
       '  <div class="muted small" v-if="d.course || d.amount">{{ d.course }}<span v-if="d.amount"> · {{ rub(d.amount) }}</span></div>' +
       '  <div class="small" v-if="d.stage === \'Оплачено\'"><b>{{ rub(d.amount) }}</b><span class="faint" v-if="d.paidAt"> · оплата {{ fmtDate(d.paidAt, false) }}</span></div>' +
       '  <div class="small muted" v-else-if="d.stage === \'Отказ\'">{{ d.lostReason || "без причины" }}</div>' +
@@ -1999,7 +2006,7 @@
       '        <div v-for="g in groups" :key="g.k"><h3 class="cal-h">{{ g.t }} <span class="badge">{{ dayData[g.k].length }}</span></h3>' +
       '          <div v-if="!dayData[g.k].length" class="muted small">нет</div>' +
       '          <a v-for="(x, i) in dayData[g.k]" :key="i" href="#" class="list-item" @click.prevent="openDeal(x)">' +
-      '            <div class="row"><b class="grow">{{ x.clientName || x.id }}</b><span v-if="x.score" class="score" :class="\'s\' + x.score">{{ x.score }}</span><span class="faint small">{{ x.time ? fmtTime(x.time) : "" }}</span></div>' +
+      '            <div class="row"><b>{{ x.clientName || x.id }}</b><span class="who-hint grow">{{ x.contactHint }}</span><span v-if="x.score" class="score" :class="\'s\' + x.score">{{ x.score }}</span><span class="faint small">{{ x.time ? fmtTime(x.time) : "" }}</span></div>' +
       '            <div class="small muted">{{ [x.type, x.potok, x.channel, x.course, x.amount && g.k === \'paid\' ? rub(x.amount) : ""].filter(Boolean).join(" · ") }}<span v-if="x.text || x.request"> — {{ x.text || x.request }}</span></div></a>' +
       '        </div>' +
       '      </div>' +
@@ -2078,6 +2085,105 @@
         }, function (err) { self.dayLoading = false; self.dayError = err.error; });
       },
       openDeal: function (x) { go('deal/' + x.id); }
+    }
+  };
+
+  /* ---------- Почистить: дубли клиентов ---------- */
+  var CleanView = {
+    data: function () { return { loading: true, error: '', groups: [], main: {}, pick: {}, busy: {}, done: {}, shown: 'all' }; },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Почистить</h1><span class="muted">похожие клиенты — проверьте и объедините, если это один человек</span>' +
+      '    <button class="btn ghost sm" style="margin-left:auto" @click="load" :disabled="loading">Проверить заново</button></div>' +
+      '  <div class="panel small muted">«Точно» — совпал ник, телефон, почта, ID GetCourse, ссылка на диалог или заказ GetCourse. «Возможно» — совпали имя и фамилия, или одно имя в том же канале с разницей в пару дней. ' +
+      '    <b>Объединить</b> — все сделки, история, контакты и участие в заданиях переходят к выбранному главному клиенту, второй удаляется. <b>Разные люди</b> — больше не покажется.</div>' +
+      '  <div v-if="loading && !groups.length" class="loading">Ищу дубли…</div>' +
+      '  <div v-else-if="error" class="panel">{{ error }}</div>' +
+      '  <template v-else>' +
+      '    <div class="filters" v-if="groups.length"><button class="btn sm" :class="{on: shown === \'all\'}" @click="shown = \'all\'">все <span class="badge">{{ left.length }}</span></button>' +
+      '      <button class="btn sm" :class="{on: shown === \'sure\'}" @click="shown = \'sure\'">точно <span class="badge">{{ left.filter(function (g) { return g.sure; }).length }}</span></button>' +
+      '      <button class="btn sm" :class="{on: shown === \'maybe\'}" @click="shown = \'maybe\'">возможно <span class="badge">{{ left.filter(function (g) { return !g.sure; }).length }}</span></button></div>' +
+      '    <div v-if="!left.length" class="panel empty-state"><p><b>Дублей не найдено.</b></p><p class="muted">Всё чисто. Загляните через неделю.</p></div>' +
+      '    <section class="panel dup-group" v-for="g in visible" :key="g.key">' +
+      '      <div class="row wrap" style="gap:6px"><span class="kind" :class="g.sure ? \'k-skip\' : \'k-maybe\'">{{ g.sure ? "точно дубль" : "возможно" }}</span><span class="small muted">{{ g.reasons.join("; ") }}</span></div>' +
+      '      <div class="dup-cards">' +
+      '        <label class="dup-card" v-for="c in g.clients" :key="c.id" :class="{main: main[g.key] === c.id}">' +
+      '          <div class="row"><input type="radio" :name="\'m\' + g.key" :value="c.id" v-model="main[g.key]" title="Главный — остаётся"><b class="grow">{{ c.name || "Без имени" }}</b><span class="faint small">{{ c.id }}</span></div>' +
+      '          <label class="small dup-pick" v-if="main[g.key] !== c.id" @click.stop><input type="checkbox" v-model="pick[g.key + \'/\' + c.id]"> объединить с главным</label>' +
+      '          <div class="small dup-pick main-mark" v-else>главный — остаётся</div>' +
+      '          <div class="small" v-if="c.nick">ник: {{ c.nick }}</div><div class="small" v-if="c.phone">тел.: {{ c.phone }}</div><div class="small" v-if="c.email">{{ c.email }}</div>' +
+      '          <div class="small" v-if="c.gcId">ID GetCourse: {{ c.gcId }}</div><div class="small ellipsis" v-if="c.dialogUrl"><a :href="c.dialogUrl" target="_blank" rel="noopener" @click.stop>{{ c.dialogUrl }}</a></div>' +
+      '          <div class="small muted" v-if="!c.nick && !c.phone && !c.email && !c.gcId && !c.dialogUrl">контактов нет</div>' +
+      '          <div class="dup-deals"><a v-for="d in c.deals" :key="d.id" :href="dealHref(d.id)" target="_blank" rel="noopener" class="small dup-deal" @click.stop>' +
+      '            <b>{{ d.id }}</b> {{ d.stage }} · {{ d.channel }} · {{ fmtDate(d.createdAt, false) }}<span v-if="d.orderNo"> · заказ {{ d.orderNo }}</span><span class="muted" v-if="d.request"> — {{ d.request }}</span> ↗</a></div>' +
+      '        </label>' +
+      '      </div>' +
+      '      <div class="row wrap" style="gap:8px;margin-top:8px">' +
+      '        <button class="btn primary sm" :disabled="busy[g.key] || !picked(g).length" @click="merge(g)">Объединить {{ picked(g).length }} в {{ main[g.key] }}</button>' +
+      '        <button class="btn sm" :disabled="busy[g.key]" @click="different(g)">Это разные люди</button>' +
+      '        <span class="small muted">Главный — отмеченный кружком: его имя остаётся, пустые контакты дополнятся из отмеченных галочкой.</span></div>' +
+      '    </section>' +
+      '    <div class="small muted" v-if="doneCount">Разобрано: {{ doneCount }}</div>' +
+      '  </template>' +
+      '</div>',
+    computed: {
+      left: function () { var d = this.done; return this.groups.filter(function (g) { return !d[g.key]; }); },
+      visible: function () { var s = this.shown; return this.left.filter(function (g) { return s === 'all' || (s === 'sure') === g.sure; }); },
+      doneCount: function () { return Object.keys(this.done).length; }
+    },
+    created: function () { this.load(); },
+    methods: {
+      fmtDate: fmtDate, dealHref: dealHref,
+      load: function () {
+        var self = this;
+        self.loading = true;
+        call('listDuplicates').then(function (res) {
+          self.loading = false;
+          self.error = '';
+          self.done = {};
+          var main = {};
+          res.groups.forEach(function (g) {
+            // Главный по умолчанию — у кого больше контактов, при равенстве — самый старый.
+            var score = function (c) { return ['nick', 'phone', 'email', 'gcId', 'dialogUrl'].filter(function (f) { return c[f]; }).length * 10 + c.deals.length; };
+            main[g.key] = g.clients.slice().sort(function (a, b) { return score(b) - score(a) || a.id.localeCompare(b.id); })[0].id;
+          });
+          var pick = {};
+          res.groups.forEach(function (g) { g.clients.forEach(function (c) { pick[g.key + '/' + c.id] = g.sure; }); });
+          self.main = main;
+          self.pick = pick;
+          self.groups = res.groups;
+          writePref('cleanAt', Date.now());
+        }, function (err) { self.loading = false; self.error = err.error; });
+      },
+      picked: function (g) {
+        var self = this;
+        var mainId = self.main[g.key];
+        return g.clients.map(function (c) { return c.id; }).filter(function (id) { return id !== mainId && self.pick[g.key + '/' + id]; });
+      },
+      merge: function (g) {
+        var self = this;
+        var mainId = self.main[g.key];
+        var others = self.picked(g);
+        if (!window.confirm('Объединить ' + others.join(', ') + ' в ' + mainId + '? Дубль будет удалён из списка клиентов, его сделки перейдут к ' + mainId + '.')) return;
+        self.busy[g.key] = true;
+        call('mergeClients', mainId, others).then(function (res) {
+          self.busy[g.key] = false;
+          if (others.length === g.clients.length - 1) self.done[g.key] = 'merged';
+          else g.clients = g.clients.filter(function (c) { return others.indexOf(c.id) < 0; });
+          store.dealCache = {};
+          store.todayData = null;
+          store.boardData = null;
+          toast('Объединено: сделок перенесено ' + res.movedDeals);
+        }, function (err) { self.busy[g.key] = false; toast(err.error, true); });
+      },
+      different: function (g) {
+        var self = this;
+        self.busy[g.key] = true;
+        call('markNotDuplicate', g.clients.map(function (c) { return c.id; })).then(function () {
+          self.busy[g.key] = false;
+          self.done[g.key] = 'different';
+        }, function (err) { self.busy[g.key] = false; toast(err.error, true); });
+      }
     }
   };
 
@@ -2776,7 +2882,7 @@
   var Root = {
     components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox,
       BoardView: BoardView, ReportView: ReportView, GuideView: GuideView, TasksView: TasksView, TaskView: TaskView, MessagesView: MessagesView,
-      LegacyImportView: LegacyImportView, CalendarView: CalendarView },
+      LegacyImportView: LegacyImportView, CalendarView: CalendarView, CleanView: CleanView },
     template:
       '<div v-if="!store.boot" class="loading">{{ store.bootError || "Загрузка…" }}</div>' +
       '<template v-else>' +
@@ -2801,6 +2907,7 @@
       '    <guide-view v-else-if="store.route.name === \'guide\'"></guide-view>' +
       '    <tasks-view v-else-if="store.route.name === \'tasks\'"></tasks-view>' +
       '    <messages-view v-else-if="store.route.name === \'messages\'"></messages-view>' +
+      '    <clean-view v-else-if="store.route.name === \'clean\'"></clean-view>' +
       '    <calendar-view v-else-if="store.route.name === \'calendar\'"></calendar-view>' +
       '    <legacy-import-view v-else-if="store.route.name === \'import\'"></legacy-import-view>' +
       '    <task-view v-else-if="store.route.name === \'task\'" :id="store.route.id"></task-view>' +
