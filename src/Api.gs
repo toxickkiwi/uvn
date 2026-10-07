@@ -44,6 +44,8 @@ function logTemplateUse(dealId, templateId) { return api_(function (user) { retu
 function markChecked(kind, id) { return api_(function (user) { return svcMarkChecked_(user, kind, id); }); }
 function getReport(from, to) { return api_(function (user) { return svcGetReport_(user, from, to); }); }
 function getBoard(filter) { return api_(function (user) { return svcGetBoard_(user, filter || {}); }); }
+function getCalendar(month) { return api_(function (user) { return svcGetCalendar_(user, month); }); }
+function getCalendarDay(day) { return api_(function (user) { return svcGetCalendarDay_(user, day); }); }
 
 /* ---------- Представление данных для клиента ---------- */
 
@@ -581,4 +583,77 @@ function svcGetBoard_(user, filter) {
   });
   open.sort(function (a, b) { return (a.taskAt || '9').localeCompare(b.taskAt || '9'); });
   return { open: open, paid: paid, lost: lost, from: from.toISOString(), to: new Date(to.getTime() - 1).toISOString() };
+}
+
+/* ---------- Календарь ---------- */
+
+/** Московский день 'YYYY-MM-DD' для даты. */
+function mskDayKey_(d) {
+  var m = new Date(d.getTime() + MSK_OFFSET_MS);
+  var p = function (n) { return (n < 10 ? '0' : '') + n; };
+  return m.getUTCFullYear() + '-' + p(m.getUTCMonth() + 1) + '-' + p(m.getUTCDate());
+}
+
+/**
+ * Сводка по дням месяца: обращения (входящие / исходящие), касания, оплаты и сумма.
+ * month — 'YYYY-MM' (по умолчанию текущий). Считается так же, как счётчики на «Сегодня».
+ */
+function svcGetCalendar_(user, month) {
+  var m = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
+  var start = m ? new Date(Date.UTC(+m[1], +m[2] - 1, 1) - MSK_OFFSET_MS) : mskMonthStart_(now_(), 0);
+  var end = mskMonthStart_(start, 1);
+  var days = {};
+  var day = function (d) {
+    var k = mskDayKey_(d);
+    return days[k] || (days[k] = { created: 0, createdIn: 0, createdOut: 0, touches: 0, paid: 0, paidSum: 0 });
+  };
+  var deals = new Table_(SHEET.DEALS).all();
+  var byId = {};
+  deals.forEach(function (d) {
+    byId[String(d.id)] = d;
+    if (isDate_(d.createdAt) && d.createdAt >= start && d.createdAt < end) {
+      var x = day(d.createdAt);
+      x.created++;
+      if (d.potok === POTOK.OUT) x.createdOut++; else x.createdIn++;
+    }
+    if (d.stage === STAGE.PAID && isDate_(d.paidAt) && d.paidAt >= start && d.paidAt < end) {
+      var y = day(d.paidAt);
+      y.paid++;
+      y.paidSum += toNumber_(d.amount);
+    }
+  });
+  new Table_(SHEET.TOUCHES).all().forEach(function (t) {
+    if (t.type !== TOUCH.STAGE && isDate_(t.date) && t.date >= start && t.date < end && byId[String(t.dealId)]) day(t.date).touches++;
+  });
+  var total = { created: 0, createdIn: 0, createdOut: 0, touches: 0, paid: 0, paidSum: 0 };
+  Object.keys(days).forEach(function (k) { Object.keys(total).forEach(function (f) { total[f] += days[k][f]; }); });
+  return { month: mskDayKey_(start).slice(0, 7), today: mskDayKey_(now_()), days: days, total: total };
+}
+
+/** Подробно за один день 'YYYY-MM-DD': кто обратился, касания, оплаты — как списки на «Сегодня». */
+function svcGetCalendarDay_(user, dayStr) {
+  var dayStart = parseTaskDate_(dayStr, '00:00');
+  if (!isDate_(dayStart)) throw userError_('Неверная дата.');
+  var dayEnd = mskDayStart_(dayStart, 1);
+  var clients = indexBy_(new Table_(SHEET.CLIENTS).all(), 'id');
+  var deals = new Table_(SHEET.DEALS).all();
+  var byId = {};
+  var brief = function (d) {
+    var c = clients[String(d.clientId)];
+    return { id: d.id, clientName: c ? String(c.name) : '', channel: d.channel, potok: d.potok, stage: d.stage, course: d.course, amount: d.amount, request: d.request, score: normScore_(d.score) };
+  };
+  var out = { day: dayStr, created: [], touches: [], paid: [] };
+  deals.forEach(function (d) {
+    byId[String(d.id)] = d;
+    if (isDate_(d.createdAt) && d.createdAt >= dayStart && d.createdAt < dayEnd) out.created.push(Object.assign(brief(d), { time: d.createdAt.toISOString() }));
+    if (d.stage === STAGE.PAID && isDate_(d.paidAt) && d.paidAt >= dayStart && d.paidAt < dayEnd) out.paid.push(brief(d));
+  });
+  new Table_(SHEET.TOUCHES).all().forEach(function (t) {
+    var d = byId[String(t.dealId)];
+    if (!d || t.type === TOUCH.STAGE || !isDate_(t.date) || t.date < dayStart || t.date >= dayEnd) return;
+    out.touches.push({ id: String(t.dealId), clientName: brief(d).clientName, type: t.type, channel: String(t.channel || d.channel || ''),
+      time: t.date.toISOString(), text: String(t.text || '').slice(0, 160) });
+  });
+  ['created', 'touches'].forEach(function (k) { out[k].sort(function (a, b) { return a.time.localeCompare(b.time); }); });
+  return out;
 }

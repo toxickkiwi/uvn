@@ -524,6 +524,19 @@ function selfTestCases_() {
       assertEq_(Object.keys(cards).sort(), ids.slice().sort());
       if (!cards[ids[0]].touches) throw new Error('нет истории');
     }],
+    ['Календарь: по дням то же, что счётчики «Сегодня»; день подробно', function () {
+      var t = svcGetToday_(u);
+      var cal = svcGetCalendar_(u, '');
+      assertEq_(cal.month, '2026-10', 'текущий месяц');
+      var d = cal.days['2026-10-05'] || {};
+      assertEq_([d.created, d.touches, d.paid], [t.counters.created, t.counters.touches, t.counters.paid], 'сегодня в календаре');
+      assertEq_(d.createdIn + d.createdOut, d.created, 'входящие + исходящие');
+      var day = svcGetCalendarDay_(u, '2026-10-05');
+      assertEq_([day.created.length, day.touches.length, day.paid.length], [t.counters.created, t.counters.touches, t.counters.paid], 'день подробно');
+      var sep = svcGetCalendar_(u, '2026-09');
+      assertEq_(sep.month, '2026-09', 'другой месяц');
+      if (sep.total.created < 1) throw new Error('сентябрь пуст');
+    }],
     ['«Сегодня»: просрочено, на сегодня, без ответа, счётчики', function () {
       var t = svcGetToday_(u);
       if (!t.fresh.length) throw new Error('нет блока «Без ответа»');

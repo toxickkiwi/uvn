@@ -9,7 +9,9 @@ var DEFAULT_SETTINGS = [
   { key: 'GC_USER_URL', value: 'https://uvnschool.ru/user/control/user/update/id/{id}' },
   { key: 'GC_ORDER_URL', value: '' },
   { key: 'MANAGER_NAME', value: 'Максим' },
-  { key: 'GC_DIALOG_URL', value: 'https://uvnschool.ru/pl/tasks/resp?filter%5Bobject_type_id%5D=55#respId={id}' },
+  // Переписка в GetCourse открывается со страницы пользователя: …/update/id/<ID пользователя>#respId=<номер переписки>.
+  // Номера переписки по ID пользователя не узнать, поэтому по умолчанию пусто: кнопка «GetCourse» ведёт в профиль.
+  { key: 'GC_DIALOG_URL', value: '' },
   { key: 'FOLLOWUP_DAYS', value: 1 },
   { key: 'TASK_DEFAULT_TIME', value: '10:00' },
   { key: 'NEW_DEAL_ALERT_MIN', value: 10 },
@@ -152,10 +154,24 @@ function fillDicts_(ss, log) {
   });
 }
 
+/** Старые значения настроек по умолчанию, которые оказались неверными: заменяются новым значением по умолчанию. */
+var OUTDATED_SETTINGS = {
+  GC_DIALOG_URL: ['https://uvnschool.ru/pl/tasks/resp?filter%5Bobject_type_id%5D=55#respId={id}']
+};
+
 /** В «Настройки» дописываются отсутствующие ключи со значениями по умолчанию. */
 function fillSettings_(ss, log) {
   var t = new Table_(SHEET.SETTINGS);
-  var keys = t.all().map(function (s) { return String(s.key).trim(); });
+  var rows = t.all();
+  var keys = rows.map(function (s) { return String(s.key).trim(); });
+  rows.forEach(function (r) {
+    var k = String(r.key).trim();
+    var old = OUTDATED_SETTINGS[k];
+    if (!old || old.indexOf(String(r.value).trim()) < 0) return;
+    var def = DEFAULT_SETTINGS.filter(function (d) { return d.key === k; })[0];
+    t.update(r._row, { value: def ? def.value : '' });
+    log.push('исправлена настройка ' + k);
+  });
   DEFAULT_SETTINGS.forEach(function (s) {
     if (keys.indexOf(s.key) >= 0) return;
     t.append({ key: s.key, value: s.value });

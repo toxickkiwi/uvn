@@ -233,6 +233,7 @@
     todayData: null,
     boardData: null,
     tasksData: null,
+    calendarData: null,
     lastTab: 'today',
     lastHash: '',
     dealCache: {},
@@ -303,7 +304,7 @@
     if (m) return { name: 'deal', id: m[1] };
     var t = /^task\/([\w-]+)/.exec(h);
     if (t) return { name: 'task', id: t[1] };
-    if (['board', 'report', 'guide', 'tasks', 'messages', 'import'].indexOf(h) >= 0) return { name: h, id: '' };
+    if (['board', 'report', 'guide', 'tasks', 'messages', 'import', 'calendar'].indexOf(h) >= 0) return { name: h, id: '' };
     return { name: 'today', id: '' };
   }
   function go(hash) {
@@ -365,7 +366,7 @@
       '    <button class="btn sm" @click="$emit(\'wrote\', d)" :disabled="busy" title="Добавить касание «Написал» и перенести задачу">Написал</button>' +
       '    <button class="btn sm" @click="$emit(\'plus\', d)" :disabled="busy">+1 день</button>' +
       '    <a v-if="link" class="btn sm" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
-      '    <a v-else-if="gc && gc.dialog" class="btn sm" :href="gc.dialog" target="_blank" rel="noopener">Диалог GetCourse ↗</a>' +
+      '    <a v-else-if="gc && (gc.dialog || gc.profile)" class="btn sm" :href="gc.dialog || gc.profile" target="_blank" rel="noopener" title="Профиль в GetCourse — там вся переписка">GetCourse ↗</a>' +
       '  </div>' +
       '</div>',
     computed: {
@@ -396,6 +397,8 @@
         limits: { overdue: 30, today: 30, fresh: 30 },
         // «Просрочено» по умолчанию свёрнуто; выбор запоминается в браузере.
         collapsed: readPref('collapsed', { overdue: true, today: false, fresh: false }),
+        // Главная — только входящие обращения; исходящие (рассылки, «написал первым») — по кнопке.
+        showOut: readPref('todayOut', false),
         list: null
       };
     },
@@ -421,21 +424,35 @@
       '          <div class="row"><b class="grow">{{ x.clientName || x.id }}</b><span class="faint small">{{ x.time ? fmtWhen(x.time) : "" }}</span></div>' +
       '          <div class="small muted">{{ [x.type, x.channel, x.course, x.amount ? rub(x.amount) : ""].filter(Boolean).join(" · ") }}<span v-if="x.text || x.request"> — {{ x.text || x.request }}</span></div></a>' +
       '      </div></div></div>' +
+      '    <div class="out-toggle small" v-if="outCount || showOut"><span class="muted" v-if="!showOut">Показаны только входящие. Исходящих (вы написали первым) скрыто: {{ outCount }}.</span><span class="muted" v-else>Показаны и исходящие.</span>' +
+      '      <button class="btn ghost sm" @click="setOut(!showOut)">{{ showOut ? "Скрыть исходящие" : "Показать исходящие" }}</button></div>' +
       '    <section class="block" v-for="b in blocks" :key="b.key">' +
       '      <button type="button" class="block-head toggle" @click="toggle(b.key)" :aria-expanded="!collapsed[b.key]">' +
       '        <span class="caret">{{ collapsed[b.key] ? "▸" : "▾" }}</span><h2>{{ b.title }}</h2>' +
-      '        <span class="badge" :class="{red: b.key === \'overdue\' && data[b.key].length}">{{ data[b.key].length }}</span>' +
-      '        <span v-if="collapsed[b.key] && data[b.key].length" class="faint" style="font-weight:400">— нажмите, чтобы раскрыть</span></button>' +
+      '        <span class="badge" :class="{red: b.key === \'overdue\' && view[b.key].length}">{{ view[b.key].length }}</span>' +
+      '        <span v-if="collapsed[b.key] && view[b.key].length" class="faint" style="font-weight:400">— нажмите, чтобы раскрыть</span></button>' +
       '      <div class="list" v-show="!collapsed[b.key]">' +
-      '        <div v-if="!data[b.key].length" class="empty">Всё сделано</div>' +
-      '        <deal-row v-for="d in data[b.key].slice(0, limits[b.key])" :key="d.id" :d="d" :late="b.key === \'overdue\'" :alert-min="alertMin"' +
+      '        <div v-if="!view[b.key].length" class="empty">Всё сделано</div>' +
+      '        <deal-row v-for="d in view[b.key].slice(0, limits[b.key])" :key="d.id" :d="d" :late="b.key === \'overdue\'" :alert-min="alertMin"' +
       '          @open="open" @wrote="wrote" @plus="plusDay"></deal-row>' +
-      '        <button v-if="data[b.key].length > limits[b.key]" class="more" @click="limits[b.key] += 50">Показать ещё {{ data[b.key].length - limits[b.key] }}</button>' +
+      '        <button v-if="view[b.key].length > limits[b.key]" class="more" @click="limits[b.key] += 50">Показать ещё {{ view[b.key].length - limits[b.key] }}</button>' +
       '      </div>' +
       '    </section>' +
       '  </template>' +
       '</div>',
     computed: {
+      view: function () {
+        var d = this.data;
+        var all = this.showOut;
+        var keep = function (x) { return all || x.potok !== 'Исходящее'; };
+        return { today: d.today.filter(keep), overdue: d.overdue.filter(keep), fresh: d.fresh.filter(keep) };
+      },
+      outCount: function () {
+        var d = this.data;
+        var n = 0;
+        [d.today, d.overdue, d.fresh].forEach(function (l) { l.forEach(function (x) { if (x.potok === 'Исходящее') n++; }); });
+        return n;
+      },
       blocks: function () {
         return [
           { key: 'today', title: 'На сегодня' },
@@ -462,6 +479,7 @@
     },
     unmounted: function () { if (this._v) this._v(); },
     methods: {
+      setOut: function (v) { this.showOut = v; writePref('todayOut', v); },
       rub: rub,
       fmtWhen: fmtWhen,
       showList: function (k) {
@@ -748,7 +766,7 @@
       '        <button v-for="k in [\'1\', \'2\', \'3\']" :key="k" class="btn sm" :class="[\'s\' + k, {on: deal.score === k}]" :title="k + \' — \' + scoreHints[k]" @click="saveDeal(\'score\', deal.score === k ? \'\' : k)">{{ k }}<span class="hide-mobile"> {{ scoreLabels[k].toLowerCase() }}</span></button></span>' +
       '      <span class="head-links"><a v-if="link" class="btn sm primary" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
       '        <a v-if="gc && gc.dialog" class="btn sm" :class="{primary: !link}" :href="gc.dialog" target="_blank" rel="noopener">Диалог GetCourse ↗</a>' +
-      '        <a v-if="gc && gc.profile" class="btn sm" :href="gc.profile" target="_blank" rel="noopener">Профиль GC ↗</a></span>' +
+      '        <a v-if="gc && gc.profile" class="btn sm" :class="{primary: !link && !gc.dialog}" :href="gc.profile" target="_blank" rel="noopener" title="Профиль в GetCourse — там вся переписка">GetCourse ↗</a></span>' +
       '    </div>' +
       '    <div v-if="client && client.check" class="banner"><b>Клиент:</b><span class="grow">{{ client.check }}</span><button class="btn sm" @click="checked(\'client\')">Проверено</button></div>' +
       '    <div v-if="deal.check" class="banner"><b>Сделка:</b><span class="grow">{{ deal.check }}</span><button class="btn sm" @click="checked(\'deal\')">Проверено</button></div>' +
@@ -763,6 +781,7 @@
       '          <div class="inline-links" v-if="f.key === \'otherLinks\' && client.otherLinks"><div v-for="u in linksOf(client.otherLinks)" :key="u"><a :href="hrefOf(u)" target="_blank" rel="noopener">{{ shortUrl(u) }} ↗</a></div></div>' +
       '          <div class="inline-links" v-if="f.key === \'nick\' && client.nick"><a :href="\'https://instagram.com/\' + client.nick" target="_blank" rel="noopener">instagram.com/{{ client.nick }} ↗</a></div>' +
       '          <div class="inline-links" v-if="f.key === \'dialogUrl\' && client.dialogUrl"><a :href="client.dialogUrl" target="_blank" rel="noopener">открыть ↗</a></div>' +
+      '          <div class="hint" v-if="f.key === \'dialogUrl\' && !client.dialogUrl && (client.gcId || deal.channel === \'GetCourse\')">Чтобы «Открыть диалог» вёл сразу в переписку: откройте её в GetCourse, скопируйте адрес страницы (в нём есть <code>#respId=</code>) и вставьте сюда.</div>' +
       '          <div class="inline-links" v-if="f.key === \'gcId\' && client.gcId && settings.GC_USER_URL"><a :href="fill(settings.GC_USER_URL, {id: client.gcId})" target="_blank" rel="noopener">профиль в GetCourse ↗</a></div>' +
       '          <div class="inline-links" v-if="f.key === \'email\' && client.email"><a :href="\'mailto:\' + client.email">написать ↗</a></div>' +
       '        </div>' +
@@ -887,7 +906,7 @@
         var c = String(this.edit.course || '').trim();
         return this.courseCustomForced || (c !== '' && courseList().indexOf(c) < 0);
       },
-      backLabel: function () { return { board: 'Доска', report: 'Отчёт', guide: 'Как работать', tasks: 'Задание', messages: 'Сообщения' }[store.lastTab] || 'Сегодня'; },
+      backLabel: function () { return { board: 'Доска', report: 'Отчёт', guide: 'Как работать', tasks: 'Задание', messages: 'Сообщения', calendar: 'Календарь' }[store.lastTab] || 'Сегодня'; },
       quick: function () { return [{ n: 0, label: 'Сегодня' }, { n: 1, label: '+1 день' }, { n: 2, label: '+2 дня' }, { n: 7, label: '+1 неделя' }]; }
     },
     watch: { id: { immediate: true, handler: function () { this.load(); } } },
@@ -1921,6 +1940,144 @@
     }
   };
 
+  /* ---------- Календарь ---------- */
+  var MONTHS_RU = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+  function ymShift(ym, n) {
+    var y = +ym.slice(0, 4);
+    var m = +ym.slice(5, 7) - 1 + n;
+    y += Math.floor(m / 12);
+    m = ((m % 12) + 12) % 12;
+    return y + '-' + (m < 9 ? '0' : '') + (m + 1);
+  }
+
+  var CalendarView = {
+    data: function () {
+      return { month: '', cal: null, loading: true, error: '', day: '', dayData: null, dayLoading: false, dayError: '' };
+    },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Календарь</h1><span class="muted">обращения, касания и оплаты по дням — нажмите на день</span></div>' +
+      '  <div class="filters cal-nav">' +
+      '    <button class="btn sm" @click="shift(-1)" aria-label="Предыдущий месяц">‹</button>' +
+      '    <b class="cal-title">{{ title }}</b>' +
+      '    <button class="btn sm" @click="shift(1)" aria-label="Следующий месяц">›</button>' +
+      '    <button class="btn ghost sm" v-if="cal && month !== cal.today.slice(0, 7)" @click="toToday">Сегодня</button>' +
+      '    <span class="muted small grow" style="text-align:right" v-if="cal">за месяц: обращений <b>{{ cal.total.created }}</b> (вх {{ cal.total.createdIn }} · исх {{ cal.total.createdOut }}) · касаний {{ cal.total.touches }} · оплат {{ cal.total.paid }}<span v-if="cal.total.paidSum"> на {{ rub(cal.total.paidSum) }}</span></span>' +
+      '  </div>' +
+      '  <div v-if="error" class="panel">{{ error }}</div>' +
+      '  <div class="cal" :class="{dim: loading && cal}">' +
+      '    <div class="cal-wd" v-for="w in weekdays" :key="w">{{ w }}</div>' +
+      '    <template v-for="(c, i) in cells" :key="i">' +
+      '      <div v-if="!c" class="cal-cell empty"></div>' +
+      '      <button v-else type="button" class="cal-cell" :class="{today: c.key === (cal && cal.today), sel: c.key === day, has: c.s && (c.s.created || c.s.touches || c.s.paid), future: cal && c.key > cal.today}" @click="openDay(c.key)">' +
+      '        <span class="cal-d">{{ c.d }}</span>' +
+      '        <template v-if="c.s">' +
+      '          <span class="cal-main" v-if="c.s.created"><b>{{ c.s.created }}</b> <span class="hide-mobile">обращ.</span></span>' +
+      '          <span class="cal-sub hide-mobile" v-if="c.s.created">вх {{ c.s.createdIn }} · исх {{ c.s.createdOut }}</span>' +
+      '          <span class="cal-sub hide-mobile" v-if="c.s.touches">касаний {{ c.s.touches }}</span>' +
+      '          <span class="cal-paid" v-if="c.s.paid">₽ {{ c.s.paid }}<span class="hide-mobile"> · {{ rubShort(c.s.paidSum) }}</span></span>' +
+      '        </template>' +
+      '      </button>' +
+      '    </template>' +
+      '  </div>' +
+      '  <div v-if="loading && !cal" class="loading">Загружаю…</div>' +
+      '  <section class="panel cal-day" v-if="day" ref="dayPanel">' +
+      '    <div class="row"><h2 class="grow" style="margin:0">{{ dayTitle }}</h2><button class="btn ghost sm" @click="day = \'\'">✕</button></div>' +
+      '    <div v-if="dayLoading && !dayData" class="loading">Загружаю…</div>' +
+      '    <div v-else-if="dayError" class="hint err">{{ dayError }}</div>' +
+      '    <template v-else-if="dayData">' +
+      '      <div class="counters" style="margin-top:10px">' +
+      '        <div class="counter"><div class="num">{{ dayData.created.length }}</div><div class="cap">обращений · вх {{ countIn }} / исх {{ dayData.created.length - countIn }}</div></div>' +
+      '        <div class="counter"><div class="num">{{ dayData.touches.length }}</div><div class="cap">касаний</div></div>' +
+      '        <div class="counter"><div class="num">{{ dayData.paid.length }}</div><div class="cap">оплат</div></div>' +
+      '        <div class="counter"><div class="num">{{ rub(paidSum) || "0 ₽" }}</div><div class="cap">сумма оплат</div></div>' +
+      '      </div>' +
+      '      <div class="rgrid">' +
+      '        <div v-for="g in groups" :key="g.k"><h3 class="cal-h">{{ g.t }} <span class="badge">{{ dayData[g.k].length }}</span></h3>' +
+      '          <div v-if="!dayData[g.k].length" class="muted small">нет</div>' +
+      '          <a v-for="(x, i) in dayData[g.k]" :key="i" href="#" class="list-item" @click.prevent="openDeal(x)">' +
+      '            <div class="row"><b class="grow">{{ x.clientName || x.id }}</b><span v-if="x.score" class="score" :class="\'s\' + x.score">{{ x.score }}</span><span class="faint small">{{ x.time ? fmtTime(x.time) : "" }}</span></div>' +
+      '            <div class="small muted">{{ [x.type, x.potok, x.channel, x.course, x.amount && g.k === \'paid\' ? rub(x.amount) : ""].filter(Boolean).join(" · ") }}<span v-if="x.text || x.request"> — {{ x.text || x.request }}</span></div></a>' +
+      '        </div>' +
+      '      </div>' +
+      '    </template>' +
+      '  </section>' +
+      '</div>',
+    computed: {
+      weekdays: function () { return ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']; },
+      title: function () {
+        if (!this.month) return '';
+        var t = MONTHS_RU[+this.month.slice(5, 7) - 1] + ' ' + this.month.slice(0, 4);
+        return t.charAt(0).toUpperCase() + t.slice(1);
+      },
+      cells: function () {
+        if (!this.month) return [];
+        var y = +this.month.slice(0, 4);
+        var m = +this.month.slice(5, 7) - 1;
+        var first = new Date(Date.UTC(y, m, 1)).getUTCDay();
+        var lead = (first + 6) % 7;
+        var n = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+        var days = this.cal && this.cal.month === this.month ? this.cal.days : {};
+        var out = [];
+        for (var i = 0; i < lead; i++) out.push(null);
+        for (var d = 1; d <= n; d++) {
+          var key = this.month + '-' + (d < 10 ? '0' : '') + d;
+          out.push({ d: d, key: key, s: days[key] || null });
+        }
+        while (out.length % 7) out.push(null);
+        return out;
+      },
+      groups: function () { return [{ k: 'created', t: 'Обращения' }, { k: 'touches', t: 'Касания' }, { k: 'paid', t: 'Оплаты' }]; },
+      countIn: function () { return this.dayData ? this.dayData.created.filter(function (x) { return x.potok !== 'Исходящее'; }).length : 0; },
+      paidSum: function () { return this.dayData ? this.dayData.paid.reduce(function (s, x) { return s + (Number(x.amount) || 0); }, 0) : 0; },
+      dayTitle: function () {
+        if (!this.day) return '';
+        var p = this.day.split('-');
+        var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
+        return d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+      }
+    },
+    created: function () {
+      var cached = store.calendarData;
+      this.month = (cached ? cached.month : '') || new Date(nowMs() + 3 * 3600000).toISOString().slice(0, 7);
+      if (cached && cached.month === this.month) { this.cal = cached; this.loading = false; }
+      this.load();
+    },
+    methods: {
+      rub: rub,
+      rubShort: function (v) { v = Number(v) || 0; return v >= 1000 ? Math.round(v / 1000) + ' т' : String(v); },
+      fmtTime: function (iso) { return fmtWhen(iso).replace(/^.*?(\d{1,2}:\d{2}).*$/, '$1'); },
+      load: function () {
+        var self = this;
+        var want = this.month;
+        self.loading = true;
+        call('getCalendar', want).then(function (res) {
+          if (self.month !== want) return;
+          self.cal = res;
+          self.loading = false;
+          self.error = '';
+          store.calendarData = res;
+        }, function (err) { self.loading = false; self.error = err.error; });
+      },
+      shift: function (n) { this.month = ymShift(this.month, n); this.day = ''; this.load(); },
+      toToday: function () { this.month = this.cal.today.slice(0, 7); this.day = ''; this.load(); },
+      openDay: function (key) {
+        var self = this;
+        self.day = key;
+        self.dayData = null;
+        self.dayError = '';
+        self.dayLoading = true;
+        call('getCalendarDay', key).then(function (res) {
+          if (self.day !== key) return;
+          self.dayData = res;
+          self.dayLoading = false;
+          nextTick(function () { if (self.$refs.dayPanel && self.$refs.dayPanel.scrollIntoView) self.$refs.dayPanel.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+        }, function (err) { self.dayLoading = false; self.dayError = err.error; });
+      },
+      openDeal: function (x) { go('deal/' + x.id); }
+    }
+  };
+
   var GuideView = {
     data: function () { return { path: ['start'] }; },
     template:
@@ -2616,7 +2773,7 @@
   var Root = {
     components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox,
       BoardView: BoardView, ReportView: ReportView, GuideView: GuideView, TasksView: TasksView, TaskView: TaskView, MessagesView: MessagesView,
-      LegacyImportView: LegacyImportView },
+      LegacyImportView: LegacyImportView, CalendarView: CalendarView },
     template:
       '<div v-if="!store.boot" class="loading">{{ store.bootError || "Загрузка…" }}</div>' +
       '<template v-else>' +
@@ -2624,6 +2781,7 @@
       '    <span class="brand">Учёт в народ · CRM</span>' +
       '    <nav class="tabs"><a v-for="t in tabs" :key="t.hash" class="tab" :class="{active: store.route.name === t.name || store.route.name === t.also}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)">{{ t.title }}</a></nav>' +
       '    <search-box ref="search"></search-box>' +
+      '    <a class="btn ghost sm help-mobile" href="#calendar" @click.prevent="go(\'calendar\')" title="Календарь">📅</a>' +
       '    <a class="btn ghost sm help-mobile" href="#report" @click.prevent="go(\'report\')" title="Отчёт">▤</a>' +
       '    <a class="btn ghost sm help-mobile" href="#guide" @click.prevent="go(\'guide\')" title="Как работать">?</a>' +
       '    <button class="btn primary" @click="store.newLeadOpen = true" title="Горячая клавиша N">+ Обращение</button>' +
@@ -2640,13 +2798,14 @@
       '    <guide-view v-else-if="store.route.name === \'guide\'"></guide-view>' +
       '    <tasks-view v-else-if="store.route.name === \'tasks\'"></tasks-view>' +
       '    <messages-view v-else-if="store.route.name === \'messages\'"></messages-view>' +
+      '    <calendar-view v-else-if="store.route.name === \'calendar\'"></calendar-view>' +
       '    <legacy-import-view v-else-if="store.route.name === \'import\'"></legacy-import-view>' +
       '    <task-view v-else-if="store.route.name === \'task\'" :id="store.route.id"></task-view>' +
       '  </main>' +
       '  <nav class="bottom-nav">' +
-      '    <a v-for="t in tabs.slice(0, 2)" :key="t.hash" :class="{active: store.route.name === t.name || store.route.name === t.also}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.title }}</a>' +
+      '    <a v-for="t in navLeft" :key="t.hash" :class="{active: store.route.name === t.name || store.route.name === t.also}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.title }}</a>' +
       '    <button class="bn-add" @click="store.newLeadOpen = true" aria-label="Новое обращение">+</button>' +
-      '    <a v-for="t in tabs.slice(2, 4)" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.short || t.title }}</a>' +
+      '    <a v-for="t in navRight" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.short || t.title }}</a>' +
       '  </nav>' +
       '  <new-lead-modal v-if="store.newLeadOpen" @close="store.newLeadOpen = false"></new-lead-modal>' +
       '</template>' +
@@ -2656,6 +2815,7 @@
       tabs: function () {
         return [
           { name: 'today', hash: 'today', title: 'Сегодня', ico: '☀' },
+          { name: 'calendar', hash: 'calendar', title: 'Календарь', ico: '▦' },
           { name: 'tasks', hash: 'tasks', title: 'Задания', ico: '✉', also: 'task' },
           { name: 'board', hash: 'board', title: 'Доска', ico: '▦' },
           { name: 'messages', hash: 'messages', title: 'Сообщения', ico: '✎' },
@@ -2663,6 +2823,8 @@
           { name: 'guide', hash: 'guide', title: 'Как работать', short: 'Помощь', ico: '?' }
         ];
       },
+      navLeft: function () { return this.tabs.filter(function (t) { return t.name === 'today' || t.name === 'tasks'; }); },
+      navRight: function () { return this.tabs.filter(function (t) { return t.name === 'board' || t.name === 'messages'; }); },
       saveState: function () {
         this.tick; // пересчёт по таймеру
         if (store.saving) return 'Сохранение…';
