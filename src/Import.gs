@@ -347,6 +347,9 @@ function legacyItemView_(it) {
 
 /* ---------- Списки рассылок → задания ---------- */
 
+/** Сегмент для тех, кто прошёл курс (в таблице Максима имя зелёное или «Прошёл курс — Да»). */
+var LEGACY_PASSED_SEGMENT = 'Прошли курс';
+
 var PERSON_RANK_ = { 'Не написали': 0, 'Написали': 1, 'Ответил': 2, 'Не интересно': 2, 'Купил': 3, 'Удалён': 2 };
 
 /** «[Имя], добрый день!» / «Имя, добрый день!» → «{Имя}, добрый день!». */
@@ -427,6 +430,7 @@ function svcLegacyTask_(user, input, apply) {
       var sentAt = raw.sentAt ? parseTaskDate_(raw.sentAt, '12:00') : '';
       if (isDate_(sentAt)) dates.push(sentAt);
       var data = {
+        segment: raw.passed ? LEGACY_PASSED_SEGMENT : segment,
         status: st.status,
         note: st.note,
         channel: legacyChannel_(raw.channel, ref.dicts.channels),
@@ -438,9 +442,11 @@ function svcLegacyTask_(user, input, apply) {
       k.forEach(function (x) { if (!have && byKey[x]) have = byKey[x]; });
       if (have) {
         var cur = have.status || PERSON_STATUS.TODO;
-        if ((PERSON_RANK_[data.status] || 0) > (PERSON_RANK_[cur] || 0) || (data.note && !String(have.note || '').trim())) {
+        var segFix = raw.passed && String(have.segment || '') !== LEGACY_PASSED_SEGMENT;
+        if (segFix) data.segmentFix = true;
+        if (segFix || (PERSON_RANK_[data.status] || 0) > (PERSON_RANK_[cur] || 0) || (data.note && !String(have.note || '').trim())) {
           stat.update++;
-          updates.push({ row: have._row, data: data, cur: cur });
+          updates.push({ row: have._row, data: data, cur: cur, note: have.note });
         } else stat.same++;
         return;
       }
@@ -449,27 +455,33 @@ function svcLegacyTask_(user, input, apply) {
     });
     var view = {
       taskName: name, taskId: task ? String(task.id) : '', isNew: !task, segment: segment,
+      passed: people.filter(function (p) { return p.passed; }).length,
+      passed: people.filter(function (p) { return p.passed; }).length,
       templates: templates.length, templatesNew: tplNew, add: stat.add, update: stat.update, same: stat.same, skipped: stat.skipped, byStatus: stat.byStatus
     };
     if (!apply) return view;
 
+    var usedSegs = [segment];
+    adds.concat(updates.map(function (u) { return { segment: u.data.segmentFix ? LEGACY_PASSED_SEGMENT : segment }; }))
+      .forEach(function (p) { if (usedSegs.indexOf(p.segment) < 0) usedSegs.push(p.segment); });
     if (!task) {
       dates.sort(function (a, b) { return a - b; });
       task = tasksT.append({
         id: tasksT.nextId('Z'), name: name, parentId: '', start: dates.length ? mskDayStart_(dates[0], 0) : '',
-        end: dates.length ? mskDayStart_(dates[dates.length - 1], 0) : '', segments: segment,
+        end: dates.length ? mskDayStart_(dates[dates.length - 1], 0) : '', segments: usedSegs.join('\n'),
         description: 'Перенесено из таблицы менеджера', createdAt: now_(), author: user.email
       });
     } else {
       var segs = splitSegments_(task.segments);
-      if (segs.indexOf(segment) < 0) tasksT.update(task._row, { segments: segs.concat([segment]).join('\n') });
+      var more = usedSegs.filter(function (x) { return segs.indexOf(x) < 0; });
+      if (more.length) tasksT.update(task._row, { segments: segs.concat(more).join('\n') });
     }
     if (tplNew) {
       var tt = new Table_(SHEET.TEMPLATES);
       if (!('taskId' in tt.col)) throw userError_('В листе «Шаблоны» нет колонки «Задание». Откройте меню CRM → «Подготовить таблицу».');
       templates.forEach(function (t) {
         if (tplByN[t.n]) return;
-        var row = tt.append({ id: tt.nextId('T'), situation: name, title: 'Вариант ' + t.n, text: legacyTemplateText_(t.text), active: true, taskId: String(task.id), segment: segment });
+        var row = tt.append({ id: tt.nextId('T'), situation: name, title: 'Вариант ' + t.n, text: legacyTemplateText_(t.text), active: true, taskId: String(task.id), segment: '' });
         tplByN[t.n] = row.id;
       });
       clearRefCache_();
@@ -484,7 +496,8 @@ function svcLegacyTask_(user, input, apply) {
         if (u.data.channel) patch.channel = u.data.channel;
         if (u.data.variant && tplByN[u.data.variant]) patch.templateId = tplByN[u.data.variant];
       }
-      if (u.data.note) patch.note = u.data.note;
+      if (u.data.note && !String(u.note || '').trim()) patch.note = u.data.note;
+      if (u.data.segmentFix) patch.segment = LEGACY_PASSED_SEGMENT;
       pt.update(u.row, patch);
     });
     if (adds.length) {
@@ -494,7 +507,7 @@ function svcLegacyTask_(user, input, apply) {
         var id = String(nextNum++);
         while (id.length < 4) id = '0' + id;
         return pt.objToRow_({
-          id: 'U' + id, taskId: String(task.id), segment: segment, firstName: p.firstName, lastName: p.lastName,
+          id: 'U' + id, taskId: String(task.id), segment: p.segment, firstName: p.firstName, lastName: p.lastName,
           email: p.email, phone: p.phone, gcId: p.gcId, vk: p.vk, source: p.source, status: p.status,
           templateId: p.variant && tplByN[p.variant] ? tplByN[p.variant] : '', channel: p.channel, sentAt: p.sentAt,
           repliedAt: '', clientId: dup ? dup.client.id : '', dealId: '', note: p.note, updatedAt: now

@@ -1742,7 +1742,7 @@
         name: ['пользователь', 'фи', 'имя и фамилия'], first: ['имя'], lastName: ['фамилия'], gcId: ['id', 'id пользователя', 'id getcourse'],
         email: ['email', 'e-mail', 'почта'], phone: ['телефон'], sent: ['написал', 'написали'], replied: ['есть ответ', 'ответ', 'ответил'],
         sentAt: ['когда написал', 'дата 1 сообщения', 'дата', 'дата сообщения'], variant: ['вариант текста', 'вариант', 'шаблон'],
-        channel: ['средство взязи', 'средство связи', 'канал'], second: ['дата 2 сообщения']
+        channel: ['средство взязи', 'средство связи', 'канал'], second: ['дата 2 сообщения'], passed: ['прошел курс', 'прошёл курс']
       };
       for (var c = range.s.c; c <= range.e.c; c++) {
         var h = text(at(ws, head, c)).toLowerCase().replace(/\s+/g, ' ');
@@ -1783,7 +1783,9 @@
         people.push({
           firstName: first, lastName: last, email: g('email'), phone: g('phone'), gcId: /^\d+$/.test(g('gcId')) ? g('gcId') : '',
           sent: g('sent'), replied: g('replied'), sentAt: cols.sentAt === undefined ? '' : day(at(ws, pr, cols.sentAt)),
-          variant: g('variant'), channel: g('channel'), note: note.join('; ')
+          variant: g('variant'), channel: g('channel'), note: note.join('; '),
+          // Зелёное имя (или «Прошёл курс — Да») — человек прошёл курс; это не отметка о переписке.
+          passed: /^да/i.test(g('passed')) || /^(FF)?(00FF00|B6D7A8|D9EAD3|93C47D)$/i.test(fill(at(ws, pr, cols.name)))
         });
       }
       if (people.length) out.tasks.push({ sheet: name.trim(), templates: templates, people: people });
@@ -1841,6 +1843,7 @@
       '      <div v-if="t.preview" class="small" style="margin:6px 0">' +
       '        <div v-if="t.preview.applied"><b>Готово.</b> <a href="#" @click.prevent="openTask(t.preview.taskId)">Открыть задание</a></div>' +
       '        <div>{{ t.preview.isNew ? "Будет создано задание" : "Задание уже есть" }} «{{ t.preview.taskName }}». Новых людей: <b>{{ t.preview.add }}</b>, обновится статус: <b>{{ t.preview.update }}</b>, без изменений: {{ t.preview.same }}<span v-if="t.preview.skipped">, пропущено (повторы, без имени): {{ t.preview.skipped }}</span>.</div>' +
+      '        <div v-if="t.preview.passed">Прошли курс (зелёное имя в таблице): {{ t.preview.passed }} — будут в сегменте «Прошли курс».</div>' +
       '        <div v-if="t.preview.templates">Варианты текста → шаблоны задания: новых {{ t.preview.templatesNew }} из {{ t.preview.templates }}.</div>' +
       '        <div class="muted">По таблице: <span v-for="(n, s) in t.preview.byStatus" :key="s">{{ s }} — {{ n }}; </span></div>' +
       '      </div>' +

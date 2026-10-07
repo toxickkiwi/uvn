@@ -425,7 +425,7 @@ function selfTestCases_() {
         name: 'Выпускники ОСН', segment: 'Все',
         templates: [{ n: '1', text: 'Имя, добрый день! Вариант один' }, { n: '2', text: '[Имя], добрый день! Вариант два' }],
         people: [
-          { firstName: 'Ирина', lastName: 'Тестова', email: 'ir@ya.ru', sent: 'Да', variant: '1', sentAt: '2026-09-24' },
+          { firstName: 'Ирина', lastName: 'Тестова', email: 'ir@ya.ru', sent: 'Да', variant: '1', sentAt: '2026-09-24', passed: true },
           { firstName: 'Анна', lastName: 'К', email: 'anna@ya.ru', sent: 'Да', variant: '2', sentAt: '2026-09-24', replied: ' Да', channel: 'эл. почта' },
           { firstName: 'Олеся', email: 'ol@ya.ru', sent: 'Нет', note: 'Уже на БК' },
           { firstName: 'Вера', email: 'vera@ya.ru' },
@@ -441,11 +441,19 @@ function selfTestCases_() {
       assertEq_([st.total, st.sent, st.answered, st.removed], [3, 2, 1, 1], 'статистика');
       var anna = t.people.filter(function (p) { return p.firstName === 'Анна'; })[0];
       assertEq_([anna.status, anna.channel], ['Ответил', 'Почта'], 'ответ и канал');
+      var ir = t.people.filter(function (p) { return p.firstName === 'Ирина'; })[0];
+      assertEq_([ir.segment, anna.segment], ['Прошли курс', 'Все'], 'зелёное имя — прошли курс');
+      assertEq_(t.task.segments, ['Все', 'Прошли курс'], 'сегменты задания');
+      assertEq_(t.templates.map(function (x) { return x.segment; }), ['', ''], 'варианты текста — для всех');
       var ol = t.people.filter(function (p) { return p.firstName === 'Олеся'; })[0];
       assertEq_([ol.status, ol.note], ['Удалён', 'Уже на БК'], 'не писали — убрана с причиной');
       input.people[3].sent = 'Да';
       var pv2 = svcLegacyTask_(u, input, false);
       assertEq_([pv2.isNew, pv2.add, pv2.update, pv2.templatesNew], [false, 0, 1, 0], 'повтор: обновится только Вера');
+      input.people[1].passed = true;
+      svcLegacyTask_(u, input, true);
+      var anna2 = svcGetTask_(u, ap.taskId).people.filter(function (p) { return p.firstName === 'Анна'; })[0];
+      assertEq_([anna2.segment, anna2.status], ['Прошли курс', 'Ответил'], 'повторный перенос исправляет сегмент, статус не трогает');
     }],
     ['Поток «Исходящее»: стадия «В диалоге», задача «Написать повторно» завтра', function () {
       var d = testDeal_('Исходящее', '@t.out').deal;
