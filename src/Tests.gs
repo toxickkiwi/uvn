@@ -255,7 +255,7 @@ function selfTestCases_() {
     ['Подстановка переменных шаблона', function () {
       var vars = templateVars_({ course: 'ЯБ', tariff: '', amount: 89900 }, { name: 'Ирина' }, u);
       var r = fillTemplate_('{Имя}, «{Курс}» {Тариф}за {Сумма}. {Менеджер}', vars);
-      assertEq_(r.text, 'Ирина, «ЯБ» за 89 900 ₽. Тест Менеджер');
+      assertEq_(r.text, 'Ирина, «ЯБ» за 89 900 ₽. Максим', '{Менеджер} — из настройки MANAGER_NAME');
       assertEq_(r.missing, ['Тариф']);
     }],
     ['Копирование шаблона пишет касание «Шаблон»', function () {
@@ -407,12 +407,45 @@ function selfTestCases_() {
       var parent = svcListTasks_(u).filter(function (x) { return x.id === task.parentId; })[0];
       assertEq_(parent.totalStats.total, 2, 'родитель суммирует подзадания');
     }],
+    ['Задания: удалить из задания только с причиной; не входит в цифры; «Завести в CRM»', function () {
+      var task = svcListTasks_(u).filter(function (x) { return x.name === 'Были на эфирах'; })[0];
+      svcImportPeople_(u, task.id, 'Был на всех', [{ firstName: 'Удаляемая', phone: '89170000009' }, { firstName: 'Заведём', email: 'zav@mail.ru' }]);
+      var people = svcGetTask_(u, task.id).people;
+      var del = people.filter(function (p) { return p.firstName === 'Удаляемая'; })[0];
+      assertThrows_(function () { svcSetPersonStatus_(u, del.id, 'Удалён', ''); }, 'note', 'без причины');
+      svcSetPersonStatus_(u, del.id, 'Удалён', 'Номер не тот');
+      var st = svcGetTask_(u, task.id).stats;
+      assertEq_([st.removed, st.total], [1, 3], 'удалённый не в цифрах');
+      var z = people.filter(function (p) { return p.firstName === 'Заведём'; })[0];
+      var crm = svcPersonToCrm_(u, z.id);
+      if (!crm.crmDealId) throw new Error('сделка не заведена');
+      assertEq_(crm.status, 'Не написали', 'статус не меняется');
+    }],
+    ['Шаблоны: категория обязательна; имя в приветствия, кроме «как к вам обращаться»', function () {
+      assertThrows_(function () { svcSaveTemplate_(u, { title: 'x', text: 'y' }); }, 'situation');
+      var a = svcSaveTemplate_(u, { title: 'Привет', situation: 'Приветствие', text: 'Здравствуйте! Меня зовут Максим.' });
+      svcSaveTemplate_(u, { title: 'Как обращаться', situation: 'Приветствие', text: 'Здравствуйте! Как я могу к вам обращаться?' });
+      var dry = svcAddNameToGreetings_(u, false);
+      assertEq_(dry.changes.map(function (c) { return c.after; }), ['Здравствуйте, {Имя}! Меня зовут Максим.'], 'что изменится');
+      svcAddNameToGreetings_(u, true);
+      var t = getRef_().templates.filter(function (x) { return x.id === a.id; })[0];
+      assertEq_(t.text, 'Здравствуйте, {Имя}! Меня зовут Максим.');
+      assertEq_(svcAddNameToGreetings_(u, false).changes.length, 0, 'повторно ничего не меняет');
+      assertEq_(fillTemplate_(t.text, templateVars_({}, { name: 'Полина Москаленко' }, u)).text, 'Здравствуйте, Полина! Меня зовут Максим.', 'только имя');
+    }],
+    ['Карточки пачкой', function () {
+      var ids = svcListDeals_(u, { limit: 3 }).map(function (d) { return d.id; });
+      var cards = svcGetDeals_(u, ids);
+      assertEq_(Object.keys(cards).sort(), ids.slice().sort());
+      if (!cards[ids[0]].touches) throw new Error('нет истории');
+    }],
     ['«Сегодня»: просрочено, на сегодня, без ответа, счётчики', function () {
       var t = svcGetToday_(u);
       if (!t.fresh.length) throw new Error('нет блока «Без ответа»');
       if (!t.today.length) throw new Error('нет задач на сегодня');
       if (t.counters.created < 5) throw new Error('счётчик обращений: ' + t.counters.created);
       if (t.counters.paid !== 1) throw new Error('счётчик оплат: ' + t.counters.paid);
+      assertEq_([t.lists.created.length, t.lists.paid.length], [t.counters.created, 1], 'списки за день');
       assertEq_([t.counters.monthPaid, t.counters.monthPaidSum], [1, 89900], 'оплачено за месяц');
     }]
   ];

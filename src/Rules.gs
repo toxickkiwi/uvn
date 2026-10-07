@@ -335,14 +335,19 @@ function formatRub_(v) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 }
 
+/** «Полина Москаленко» → «Полина»: в обращении нужно только имя. */
+function firstName_(name) {
+  return String(name || '').trim().split(/\s+/)[0] || '';
+}
+
 /** Значения переменных шаблона для сделки. */
 function templateVars_(deal, client, user) {
   return {
-    'Имя': client ? String(client.name || '').trim() : '',
+    'Имя': client ? firstName_(client.name) : '',
     'Курс': deal ? String(deal.course || '').trim() : '',
     'Тариф': deal ? String(deal.tariff || '').trim() : '',
     'Сумма': deal && toNumber_(deal.amount) > 0 ? formatRub_(deal.amount) : '',
-    'Менеджер': user ? String(user.name || '').trim() : ''
+    'Менеджер': String(setting_('MANAGER_NAME') || (user ? user.name : '') || '').trim()
   };
 }
 

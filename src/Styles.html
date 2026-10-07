@@ -226,13 +226,15 @@
   .feed-item.pending { opacity: .6; }
 
   /* ---------- Доска ---------- */
-  .board { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
-  .bcol { flex: 1 1 200px; min-width: 180px; background: #eceff3; border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 210px); }
-  .bcol.closed { flex: 0 0 104px; min-width: 104px; }
-  .bcol.closed.expanded { flex: 1 1 200px; min-width: 180px; }
+  /* Доска листается вниз целиком; колонки делят ширину; заголовки прилипают под шапкой. */
+  .board { display: flex; gap: 8px; align-items: flex-start; }
+  .bcol { flex: 1 1 0; min-width: 0; background: #eceff3; border-radius: var(--radius); display: flex; flex-direction: column; }
+  .bcol .bcol-head { position: sticky; top: 50px; z-index: 2; background: #eceff3; border-radius: var(--radius) var(--radius) 0 0; }
+  .bcol.closed { flex: 0 0 96px; }
+  .bcol.closed.expanded { flex: 1 1 0; }
   .bcol-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; }
   .closed-head { border: 0; background: none; cursor: pointer; width: 100%; flex-wrap: wrap; }
-  .bcol-body { padding: 0 8px 8px; overflow-y: auto; min-height: 60px; flex: 1; }
+  .bcol-body { padding: 0 6px 8px; min-height: 80px; flex: 1; }
   .bcard { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 8px 9px; margin-bottom: 7px; cursor: pointer; box-shadow: 0 1px 1px rgba(0,0,0,.04); }
   .bcard:hover { border-color: var(--line-strong); }
   .bcard.c-yellow { background: #fff8d6; border-color: #f0d66b; }
@@ -359,5 +361,34 @@
     .help-mobile { display: inline-flex; }
     .task-card.sub, .add-sub { margin-left: 12px; }
     .people-list { max-height: none; }
+  }
+
+  /* ---------- Правки 07.10 ---------- */
+  .counter.clickable { text-align: left; cursor: pointer; font: inherit; color: inherit; }
+  .counter.clickable:hover { border-color: var(--accent); }
+  .counter .see { color: var(--accent); font-size: 11px; margin-left: 4px; }
+  .list-item { display: block; padding: 8px 4px; border-bottom: 1px solid var(--line); color: var(--text); text-decoration: none !important; }
+  .list-item:hover { background: var(--bg); }
+  .head-links { margin-left: auto; display: inline-flex; gap: 6px; flex-wrap: wrap; }
+  .tpl-item-row { display: flex; align-items: center; }
+  .tpl-item-row.on { background: var(--accent-weak); }
+  .tpl-item-row .tpl-item { flex: 1; }
+  .tpl-quick { border: 0; background: none; cursor: pointer; padding: 4px 8px; font-size: 15px; opacity: .6; }
+  .tpl-quick:hover { opacity: 1; }
+  .similar { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; margin: -4px 0 10px; background: #fafbfc; }
+  .similar-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--line); }
+  .similar-item:first-of-type { border-top: 0; }
+  .msg-group { margin-bottom: 18px; }
+  .msg-group h2 { margin-bottom: 8px; }
+  .msg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+  .msg-card { display: flex; flex-direction: column; gap: 8px; }
+  .msg-card.hidden { opacity: .55; }
+  .msg-text { max-height: 200px; overflow: auto; background: #fafbfc; border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .msg-text mark, .tpl-text mark { background: var(--warn-bg); color: var(--warn); border-radius: 3px; padding: 0 2px; }
+  .greet-row { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  @media (max-width: 767px) {
+    .board { flex-direction: column; }
+    .msg-grid { grid-template-columns: minmax(0, 1fr); }
+    .head-links { margin-left: 0; }
   }
 </style>

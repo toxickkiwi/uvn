@@ -32,6 +32,11 @@ test('setupSpreadsheet на стартовой таблице: данные не
     let after = sim.ss.dump(n);
     // Новые колонки дописываются в конец: «Перспектива» и «Был контакт…» в «Сделки», «Другие ссылки», «Канал».
     const added = { 'Сделки': ['Перспектива', 'Был контакт', 'Где был контакт', 'Когда был контакт', 'Комментарий о контакте'], 'Клиенты': ['Другие ссылки'], 'Касания': ['Канал'], 'Шаблоны': ['Задание', 'Сегмент'] }[n];
+    if (n === 'Настройки') {
+      // Новые настройки дописываются строками в конец.
+      assert.ok(after.slice(before[n].length).every((r) => ['GC_DIALOG_URL', 'MANAGER_NAME'].indexOf(r[0]) >= 0), 'новые настройки');
+      after = after.slice(0, before[n].length);
+    }
     if (added) {
       const w = before[n][0].length;
       assert.deepStrictEqual(after[0].slice(w), added, 'новые колонки ' + n);
@@ -72,7 +77,7 @@ test('пустая таблица: создаются все листы, спр�
     .forEach((n) => assert.ok(sim.ss.getSheetByName(n), 'нет листа ' + n));
   assert.deepStrictEqual(sim.ss.dump('Сделки')[0].slice(0, 3), ['ID', 'ID клиента', 'Поток']);
   assert.strictEqual(sim.ss.dump('Справочники')[7][2], 'Отказ');
-  assert.strictEqual(sim.ss.dump('Настройки').length, 7);
+  assert.strictEqual(sim.ss.dump('Настройки').length, 9);
 });
 
 test('недостающая колонка дописывается в конец, порядок остальных сохраняется', () => {

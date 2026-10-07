@@ -229,6 +229,7 @@
     lastTab: 'today',
     lastHash: '',
     dealCache: {},
+    dealHints: {},
     todayVersion: 0
   });
 
@@ -255,12 +256,36 @@
     });
   }
 
+  function firstName(n) { return String(n || '').trim().split(/\s+/)[0] || ''; }
+  /** Ссылки GetCourse по ID пользователя: профиль и переписка (шаблоны — в «Настройках»). */
+  function gcLinks(gcId) {
+    if (!gcId) return null;
+    var s = store.boot.settings;
+    return { profile: s.GC_USER_URL ? fill(s.GC_USER_URL, { id: gcId }) : '', dialog: s.GC_DIALOG_URL ? fill(s.GC_DIALOG_URL, { id: gcId }) : '' };
+  }
+  function managerName() { return store.boot.settings.MANAGER_NAME || store.boot.user.name; }
+  /** Ссылка на сделку в новой вкладке (сайт открыт внутри Google — нужен полный адрес). */
+  function dealHref(id) { return (store.boot.appUrl || '') + '#deal/' + id; }
+
   function dialogLink(d) {
     if (!d) return '';
     if (d.channel === 'Инстаграм' && d.nick) return 'https://instagram.com/' + d.nick;
     if (d.dialogUrl) return d.dialogUrl;
     if (d.nick) return 'https://instagram.com/' + d.nick;
     return '';
+  }
+
+  /** Строка сделки из списка — чтобы карточка показала шапку сразу, пока грузится история. */
+  function hintDeal(d) { if (d && d.id) store.dealHints[d.id] = d; }
+  var prefetching = {};
+  function prefetchDeals(ids) {
+    ids = ids.filter(function (id) { return !store.dealCache[id] && !prefetching[id]; }).slice(0, 120);
+    if (!ids.length) return;
+    ids.forEach(function (id) { prefetching[id] = true; });
+    call('getDeals', ids).then(function (cards) {
+      Object.keys(cards).forEach(function (id) { if (!store.dealCache[id]) store.dealCache[id] = cards[id]; });
+      ids.forEach(function (id) { delete prefetching[id]; });
+    }, function () { ids.forEach(function (id) { delete prefetching[id]; }); });
   }
 
   /* ================= Маршрутизация ================= */
@@ -271,7 +296,7 @@
     if (m) return { name: 'deal', id: m[1] };
     var t = /^task\/([\w-]+)/.exec(h);
     if (t) return { name: 'task', id: t[1] };
-    if (h === 'board' || h === 'report' || h === 'guide' || h === 'tasks') return { name: h, id: '' };
+    if (['board', 'report', 'guide', 'tasks', 'messages'].indexOf(h) >= 0) return { name: h, id: '' };
     return { name: 'today', id: '' };
   }
   function go(hash) {
@@ -332,12 +357,14 @@
       '    <button class="btn sm" @click="$emit(\'wrote\', d)" :disabled="busy" title="Добавить касание «Написал» и перенести задачу">Написал</button>' +
       '    <button class="btn sm" @click="$emit(\'plus\', d)" :disabled="busy">+1 день</button>' +
       '    <a v-if="link" class="btn sm" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
+      '    <a v-else-if="gc && gc.dialog" class="btn sm" :href="gc.dialog" target="_blank" rel="noopener">Диалог GetCourse ↗</a>' +
       '  </div>' +
       '</div>',
     computed: {
       busy: function () { return !!this.d._busy; },
       colorTitle: function () { return COLOR_TITLE[this.d.color] || ''; },
       link: function () { return dialogLink(this.d); },
+      gc: function () { return gcLinks(this.d.gcId); },
       ago: function () { return daysAgo(this.d.lastTouchAt); },
       agoText: function () {
         var n = this.ago;
@@ -360,7 +387,8 @@
         loading: !store.todayData, error: '', data: store.todayData,
         limits: { overdue: 30, today: 30, fresh: 30 },
         // «Просрочено» по умолчанию свёрнуто; выбор запоминается в браузере.
-        collapsed: readPref('collapsed', { overdue: true, today: false, fresh: false })
+        collapsed: readPref('collapsed', { overdue: true, today: false, fresh: false }),
+        list: null
       };
     },
     template:
@@ -372,11 +400,18 @@
       '  <template v-else-if="data">' +
       '    <div class="month-total"><span>Итого оплачено за {{ monthName }}:</span> <b>{{ rub(data.counters.monthPaidSum) || "0 ₽" }}</b> <span class="muted">· оплат: {{ data.counters.monthPaid }}</span></div>' +
       '    <div class="counters">' +
-      '      <div class="counter"><div class="num">{{ data.counters.created }}</div><div class="cap">новых обращений</div></div>' +
-      '      <div class="counter"><div class="num">{{ data.counters.touches }}</div><div class="cap">касаний</div></div>' +
-      '      <div class="counter"><div class="num">{{ data.counters.paid }}</div><div class="cap">оплат</div></div>' +
+      '      <button type="button" class="counter clickable" @click="showList(\'created\')"><div class="num">{{ data.counters.created }}</div><div class="cap">новых обращений <span class="see">посмотреть</span></div></button>' +
+      '      <button type="button" class="counter clickable" @click="showList(\'touches\')"><div class="num">{{ data.counters.touches }}</div><div class="cap">касаний <span class="see">посмотреть</span></div></button>' +
+      '      <button type="button" class="counter clickable" @click="showList(\'paid\')"><div class="num">{{ data.counters.paid }}</div><div class="cap">оплат <span class="see">посмотреть</span></div></button>' +
       '      <div class="counter"><div class="num">{{ rub(data.counters.paidSum) || "0 ₽" }}</div><div class="cap">сумма оплат</div></div>' +
       '    </div>' +
+      '    <div v-if="list" class="overlay" @click.self="list = null" @keydown.esc="list = null"><div class="modal">' +
+      '      <div class="modal-head"><h2>{{ list.title }}</h2><button class="btn ghost sm" style="margin-left:auto" @click="list = null">✕</button></div>' +
+      '      <div class="modal-body"><div v-if="!list.items.length" class="muted">Сегодня пока нет.</div>' +
+      '        <a v-for="(x, i) in list.items" :key="i" href="#" class="list-item" @click.prevent="list = null; open(x)">' +
+      '          <div class="row"><b class="grow">{{ x.clientName || x.id }}</b><span class="faint small">{{ x.time ? fmtWhen(x.time) : "" }}</span></div>' +
+      '          <div class="small muted">{{ [x.type, x.channel, x.course, x.amount ? rub(x.amount) : ""].filter(Boolean).join(" · ") }}<span v-if="x.text || x.request"> — {{ x.text || x.request }}</span></div></a>' +
+      '      </div></div></div>' +
       '    <section class="block" v-for="b in blocks" :key="b.key">' +
       '      <button type="button" class="block-head toggle" @click="toggle(b.key)" :aria-expanded="!collapsed[b.key]">' +
       '        <span class="caret">{{ collapsed[b.key] ? "▸" : "▾" }}</span><h2>{{ b.title }}</h2>' +
@@ -394,8 +429,8 @@
     computed: {
       blocks: function () {
         return [
-          { key: 'overdue', title: 'Просрочено' },
           { key: 'today', title: 'На сегодня' },
+          { key: 'overdue', title: 'Просроченные' },
           { key: 'fresh', title: 'Без ответа' }
         ];
       },
@@ -419,6 +454,18 @@
     unmounted: function () { if (this._v) this._v(); },
     methods: {
       rub: rub,
+      fmtWhen: fmtWhen,
+      showList: function (k) {
+        var titles = { created: 'Новые обращения за сегодня', touches: 'Касания за сегодня', paid: 'Оплаты за сегодня' };
+        this.list = { title: titles[k], items: (this.data.lists && this.data.lists[k]) || [] };
+      },
+      /** Карточки из «Сегодня» подгружаются заранее одной пачкой — потом открываются сразу. */
+      prefetch: function () {
+        var d = this.data;
+        var ids = [].concat(d.today, d.overdue, d.fresh).map(function (x) { hintDeal(x); return x.id; })
+          .filter(function (id) { return !store.dealCache[id]; });
+        prefetchDeals(ids);
+      },
       toggle: function (k) {
         this.collapsed[k] = !this.collapsed[k];
         writePref('collapsed', this.collapsed);
@@ -432,6 +479,7 @@
           if ((self._edits || 0) !== mark) { self.load(true); return; }
           self.data = data;
           store.todayData = data;
+          self.prefetch();
           self.error = '';
           self.loading = false;
         }, function (err) {
@@ -439,7 +487,7 @@
           self.loading = false;
         });
       },
-      open: function (d) { go('deal/' + d.id); },
+      open: function (d) { hintDeal(d); go('deal/' + d.id); },
       /** Убирает сделку из блоков и кладёт заново по тем же правилам, что getToday. */
       place: function (d) {
         var self = this;
@@ -483,6 +531,7 @@
         }
         self.place(guess);
         self.data.counters.touches++;
+        if (self.data.lists) self.data.lists.touches.unshift({ id: d.id, clientName: d.clientName, type: 'Написал', channel: d.channel, time: new Date().toISOString(), text: '' });
         toast('Касание добавлено, задача: ' + fmtWhen(guess.taskAt));
         save(call('addTouch', d.id, { type: 'Написал', text: '' })).then(function (res) {
           var nd = self.merge(guess, res.deal);
@@ -490,6 +539,7 @@
           store.todayData = self.data;
         }, function () {
           self.data.counters.touches--;
+          if (self.data.lists) self.data.lists.touches = self.data.lists.touches.filter(function (x) { return !(x.id === d.id && x.type === 'Написал' && !x.text); });
           self.place(d);
         });
       },
@@ -592,7 +642,9 @@
       '    <div class="tpl-list">' +
       '      <template v-for="g in groups" :key="g.name">' +
       '        <div class="tpl-group">{{ g.name }}</div>' +
-      '        <button v-for="t in g.items" :key="t.id" class="tpl-item" :class="{on: selected && selected.id === t.id}" @click="selected = t">{{ t.title }}</button>' +
+      '        <div v-for="t in g.items" :key="t.id" class="tpl-item-row" :class="{on: selected && selected.id === t.id}">' +
+      '          <button class="tpl-item" @click="selected = t">{{ t.title }}</button>' +
+      '          <button class="tpl-quick" :disabled="busy" @click="quick(t)" title="Скопировать сразу">📋</button></div>' +
       '      </template>' +
       '      <div v-if="!groups.length" class="empty">Ничего не найдено</div>' +
       '    </div>' +
@@ -611,11 +663,11 @@
       vars: function () {
         var d = this.deal || {};
         return {
-          'Имя': this.client ? this.client.name : '',
+          'Имя': firstName(this.client ? this.client.name : d.clientName),
           'Курс': d.course || '',
           'Тариф': d.tariff || '',
           'Сумма': Number(d.amount) > 0 ? rub(d.amount) : '',
-          'Менеджер': store.boot.user.name
+          'Менеджер': managerName()
         };
       },
       groups: function () {
@@ -640,6 +692,7 @@
       }
     },
     methods: {
+      quick: function (t) { this.selected = t; this.copy(); },
       copy: function () {
         var self = this;
         var tpl = this.selected;
@@ -667,7 +720,8 @@
         errField: '', clientErr: '', stageTarget: '', showTpl: false,
         touch: { type: 'Написал', text: '', channel: '', date: '', showDate: false }, touchBusy: false,
         edit: {},
-        courseCustomForced: false
+        courseCustomForced: false,
+        partial: false
       };
     },
     template:
@@ -677,18 +731,21 @@
       '  <template v-else-if="deal">' +
       '    <div class="deal-head">' +
       '      <button class="btn ghost sm" @click="back">← {{ backLabel }}</button>' +
-      '      <h1>{{ client ? client.name : "Клиент не найден" }}</h1>' +
+      '      <h1>{{ client ? client.name : (deal.clientName || (partial ? "…" : "Клиент не найден")) }}</h1>' +
       '      <span class="stage" :class="stageClass(deal.stage)">{{ deal.stage }}</span>' +
       '      <span class="chip" :class="\'ch-\' + deal.channel">{{ deal.channel }}</span>' +
       '      <span class="faint">{{ deal.id }} · {{ deal.potok }} · создана {{ fmtDate(deal.createdAt) }}</span>' +
       '      <button class="btn sm prospect-btn" :class="{on: deal.prospect}" :disabled="deal.stage === \'Оплачено\' || deal.stage === \'Отказ\'" @click="saveDeal(\'prospect\', !deal.prospect)" title="Жёлтый цвет: работаем плотно, есть перспектива оплаты">{{ deal.prospect ? "★ Есть перспектива" : "☆ Перспектива оплаты" }}</button>' +
-      '      <a v-if="link" class="btn sm primary" style="margin-left:auto" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
+      '      <span class="head-links"><a v-if="link" class="btn sm primary" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
+      '        <a v-if="gc && gc.dialog" class="btn sm" :class="{primary: !link}" :href="gc.dialog" target="_blank" rel="noopener">Диалог GetCourse ↗</a>' +
+      '        <a v-if="gc && gc.profile" class="btn sm" :href="gc.profile" target="_blank" rel="noopener">Профиль GC ↗</a></span>' +
       '    </div>' +
       '    <div v-if="client && client.check" class="banner"><b>Клиент:</b><span class="grow">{{ client.check }}</span><button class="btn sm" @click="checked(\'client\')">Проверено</button></div>' +
       '    <div v-if="deal.check" class="banner"><b>Сделка:</b><span class="grow">{{ deal.check }}</span><button class="btn sm" @click="checked(\'deal\')">Проверено</button></div>' +
       '    <div class="deal-grid">' +
 
       /* ---- Клиент ---- */
+      '      <div class="panel zone-client" v-if="partial && !client"><h2>Клиент</h2><div class="muted">Загружаю…</div></div>' +
       '      <div class="panel zone-client" v-if="client">' +
       '        <h2>Клиент <span class="faint" style="font-weight:400">{{ client.id }}</span></h2>' +
       '        <div class="kv" v-for="f in clientFields" :key="f.key"><div class="label">{{ f.label }}</div>' +
@@ -721,7 +778,8 @@
       '          <div class="hint" v-if="touch.showDate && touch.date">Старая переписка: стадия и задача не изменятся.</div>' +
       '          <div class="row" style="margin-top:8px"><span class="hint grow hide-mobile">Ctrl+Enter — добавить</span><button class="btn primary" :disabled="touchBusy" @click="addTouch">Добавить</button></div>' +
       '        </div>' +
-      '        <div v-if="!touches.length" class="muted">Касаний пока нет.</div>' +
+      '        <div v-if="partial" class="muted">Загружаю историю…</div>' +
+      '        <div v-else-if="!touches.length" class="muted">Касаний пока нет.</div>' +
       '        <div v-for="(t, i) in touches" :key="i" class="feed-item" :class="{system: t.type === \'Смена стадии\', pending: t._pending}">' +
       '          <div class="feed-meta"><span v-if="dirOf(t.type)" class="dir-chip" :class="\'dir-\' + dirOf(t.type)">{{ dirOf(t.type) === \'in\' ? \'↓ входящее\' : \'↑ исходящее\' }}</span><b>{{ t.type }}</b><span v-if="t.channel" class="chip" :class="\'ch-\' + t.channel">{{ chLabel(t.channel) }}</span><span>{{ fmtDate(t.date) }}</span><span v-if="t.authorName">{{ t.authorName }}</span><span v-if="t._pending" class="faint">сохраняю…</span></div>' +
       '          <div class="pre" v-if="t.text">{{ t.text }}</div>' +
@@ -782,7 +840,12 @@
     computed: {
       dicts: function () { return store.boot.dicts; },
       settings: function () { return store.boot.settings; },
-      link: function () { return this.deal && this.client ? dialogLink({ channel: this.deal.channel, nick: this.client.nick, dialogUrl: this.client.dialogUrl }) : ''; },
+      link: function () {
+        if (!this.deal) return '';
+        var c = this.client || { nick: this.deal.nick, dialogUrl: this.deal.dialogUrl };
+        return dialogLink({ channel: this.deal.channel, nick: c.nick, dialogUrl: c.dialogUrl });
+      },
+      gc: function () { return gcLinks(this.client ? this.client.gcId : this.deal && this.deal.gcId); },
       isOpen: function () { return ['Новое', 'В диалоге', 'Курс подобран', 'Заказ создан', 'Отложено'].indexOf(this.deal.stage) >= 0; },
       taskInPast: function () { return this.deal.taskAt && new Date(this.deal.taskAt).getTime() < Date.now() - 60000; },
       touchTypes: function () {
@@ -812,7 +875,7 @@
         var c = String(this.edit.course || '').trim();
         return this.courseCustomForced || (c !== '' && courseList().indexOf(c) < 0);
       },
-      backLabel: function () { return { board: 'Доска', report: 'Отчёт', guide: 'Как работать', tasks: 'Задание' }[store.lastTab] || 'Сегодня'; },
+      backLabel: function () { return { board: 'Доска', report: 'Отчёт', guide: 'Как работать', tasks: 'Задание', messages: 'Сообщения' }[store.lastTab] || 'Сегодня'; },
       quick: function () { return [{ n: 0, label: 'Сегодня' }, { n: 1, label: '+1 день' }, { n: 2, label: '+2 дня' }, { n: 7, label: '+1 неделя' }]; }
     },
     watch: { id: { immediate: true, handler: function () { this.load(); } } },
@@ -836,13 +899,19 @@
         var id = this.id;
         self.showTpl = false;
         var cached = store.dealCache[id];
+        var hint = store.dealHints[id];
         if (cached) self.show(cached);
-        else { self.loading = true; self.deal = null; }
+        else if (hint) {
+          // Шапка и поля сделки — сразу из строки списка; история и клиент догрузятся.
+          self.show({ deal: hint, client: null, touches: [], otherDeals: [] });
+          self.partial = true;
+        } else { self.loading = true; self.deal = null; }
         var mark = self._edits || 0;
         call('getDeal', id).then(function (data) {
           if (self.id !== id) return;
           if ((self._edits || 0) !== mark) return; // свежие правки уже на экране
           store.dealCache[id] = data;
+          self.partial = false;
           self.show(data);
           document.title = (data.client ? data.client.name + ' — ' : '') + 'CRM';
         }, function (err) {
@@ -877,25 +946,39 @@
         store.todayData = null;
       },
       saveDeal: function (field, value) {
-        var self = this;
         var patch = {};
         patch[field] = field === 'amount' ? (value === '' ? '' : Number(value)) : value;
-        return save(call('updateDeal', this.deal.id, patch)).then(function (res) {
-          self.applyResult(res);
-        }, function (err) {
-          self.errField = err.field || field;
-          self.resetEdit();
-        });
+        return this.savePatch(patch);
       },
+      /**
+       * Поле меняется на экране сразу, запрос идёт в фоне. Запросы одной карточки — строго по очереди,
+       * чтобы быстрые правки подряд не обгоняли друг друга. Отказ сервера — поле возвращается.
+       */
       savePatch: function (patch) {
         var self = this;
-        return save(call('updateDeal', this.deal.id, patch)).then(function (res) {
-          self.courseCustomForced = false;
-          self.applyResult(res);
-        }, function (err) {
-          self.errField = err.field || Object.keys(patch)[0];
-          self.resetEdit();
+        var before = Object.assign({}, this.deal);
+        var local = Object.assign({}, patch);
+        if ('prospect' in local) local.color = local.prospect && this.deal.stage !== 'Отказ' ? (this.deal.stage === 'Оплачено' ? 'green' : 'yellow') : (this.deal.stage === 'Оплачено' ? 'green' : 'white');
+        this.deal = Object.assign({}, this.deal, local);
+        this.errField = '';
+        this.remember();
+        var id = this.deal.id;
+        this._queue = (this._queue || Promise.resolve()).then(function () {
+          return save(call('updateDeal', id, patch)).then(function (res) {
+            if (self.deal && self.deal.id === id) {
+              self.courseCustomForced = false;
+              self.applyResult(res);
+            }
+          }, function (err) {
+            if (self.deal && self.deal.id === id) {
+              self.deal = before;
+              self.errField = err.field || Object.keys(patch)[0];
+              self.resetEdit();
+              self.remember();
+            }
+          });
         });
+        return this._queue;
       },
       saveIfChanged: function (field) {
         var v = this.edit[field];
@@ -1002,7 +1085,7 @@
         f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '', prospect: false,
           priorContact: '', priorWhere: '', priorWhen: '', priorNote: '' },
         today: toInputDate(new Date().toISOString()),
-        customCourse: false, dups: null, chosen: null, force: false, checking: false, busy: false, errField: '', lastChecked: ''
+        customCourse: false, dups: null, chosen: null, force: false, checking: false, busy: false, errField: '', lastChecked: '', similar: []
       };
     },
     template:
@@ -1025,11 +1108,19 @@
       '          <div v-for="c in dups" :key="c.id" class="dup-card">' +
       '            <div class="row wrap"><b>{{ c.name }}</b><span class="faint">{{ c.id }}</span><span class="muted">совпало: {{ c.matchedBy.join(", ") }}</span></div>' +
       '            <div class="muted" style="font-size:13px" v-if="c.deals.length">Сделки: <span v-for="(d, i) in c.deals" :key="d.id">{{ i ? ", " : "" }}{{ d.id }} — {{ d.stage }}{{ d.course ? " (" + d.course + ")" : "" }}</span></div>' +
-      '            <button class="btn sm primary" style="margin-top:6px" @click="choose(c)">Это он — создать сделку для этого клиента</button>' +
+      '            <div class="row wrap" style="margin-top:6px"><button class="btn sm primary" @click="choose(c)">Это он — создать сделку для этого клиента</button>' +
+      '              <a v-if="c.deals.length" class="btn sm" :href="dealHref(c.deals[c.deals.length - 1].id)" target="_blank" rel="noopener">Открыть в новой вкладке ↗</a></div>' +
       '          </div>' +
       '          <button class="btn sm" @click="force = true">Это другой человек</button>' +
       '        </div>' +
       '        <div class="field"><label>Имя</label><input class="input" :class="{\'has-error\': errField===\'name\'}" v-model="f.name"></div>' +
+      '        <div v-if="similar.length && !(dups && dups.length && !force)" class="similar">' +
+      '          <div class="small muted">Похожие клиенты в CRM:</div>' +
+      '          <div v-for="c in similar" :key="c.clientId" class="similar-item">' +
+      '            <span class="grow"><b>{{ c.clientName }}</b> <span class="small muted">{{ [c.nick ? "@" + c.nick : "", c.channel, c.stage].filter(Boolean).join(" · ") }}</span></span>' +
+      '            <button type="button" class="btn sm" @click="chooseSimilar(c)">Это он</button>' +
+      '            <a class="btn ghost sm" :href="dealHref(c.id)" target="_blank" rel="noopener" title="Открыть в новой вкладке">↗</a></div>' +
+      '        </div>' +
       '        <div class="field prior-box" :class="{\'has-error\': errField===\'priorContact\'}"><label>Был контакт с этим человеком раньше (до CRM)?</label>' +
       '          <div class="seg"><button type="button" class="btn sm" :class="{on: f.priorContact === \'Нет\'}" @click="f.priorContact = \'Нет\'">Нет, впервые</button>' +
       '            <button type="button" class="btn sm" :class="{on: f.priorContact === \'Да\'}" @click="f.priorContact = \'Да\'">Да, общались</button></div>' +
@@ -1064,7 +1155,10 @@
       tariffNames: function () { return tariffOptions(this.f.course, ''); },
       outgoing: function () { return this.f.potok === 'Исходящее'; }
     },
-    watch: { 'f.contact': function () { this.force = false; } },
+    watch: {
+      'f.contact': function (v) { this.force = false; this.suggest(v); },
+      'f.name': function (v) { this.suggest(v); }
+    },
     mounted: function () { var self = this; nextTick(function () { if (self.$refs.contact) self.$refs.contact.focus(); }); },
     methods: {
       checkDups: function () {
@@ -1078,10 +1172,28 @@
           self.dups = list;
         }, function () { self.checking = false; });
       },
+      dealHref: dealHref,
       choose: function (c) {
         this.chosen = c;
         this.dups = null;
+        this.similar = [];
       },
+      /** Подсказки по мере ввода имени или ника: ищем по CRM, один вариант на клиента. */
+      suggest: function (text) {
+        var self = this;
+        var q = String(text || '').trim().replace(/^@/, '');
+        clearTimeout(this._sg);
+        if (q.length < 3 || /^https?:/i.test(q)) { this.similar = []; return; }
+        this._sg = setTimeout(function () {
+          var my = (self._sgSeq = (self._sgSeq || 0) + 1);
+          call('listDeals', { query: q, limit: 30 }).then(function (list) {
+            if (my !== self._sgSeq) return;
+            var seen = {};
+            self.similar = list.filter(function (d) { return seen[d.clientId] ? false : (seen[d.clientId] = true); }).slice(0, 5);
+          }, function () {});
+        }, 350);
+      },
+      chooseSimilar: function (d) { this.choose({ id: d.clientId, name: d.clientName }); },
       onCourse: function () {
         var self = this;
         if (this.f.course === '__other') {
@@ -1189,14 +1301,16 @@
       '    <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
       '    <span class="chip" :class="\'ch-\' + d.channel">{{ chLabel(d.channel) }}</span></div>' +
       '  <div class="muted small" v-if="d.course || d.amount">{{ d.course }}<span v-if="d.amount"> · {{ rub(d.amount) }}</span></div>' +
-      '  <div class="small"><span :class="{late: late}">{{ d.taskAt ? fmtWhen(d.taskAt) : "нет задачи" }}</span><span class="faint" v-if="d.nextTask"> · {{ d.nextTask }}</span></div>' +
+      '  <div class="small" v-if="d.stage === \'Оплачено\'"><b>{{ rub(d.amount) }}</b><span class="faint" v-if="d.paidAt"> · оплата {{ fmtDate(d.paidAt, false) }}</span></div>' +
+      '  <div class="small muted" v-else-if="d.stage === \'Отказ\'">{{ d.lostReason || "без причины" }}</div>' +
+      '  <div class="small" v-else><span :class="{late: late}">{{ d.taskAt ? fmtWhen(d.taskAt) : "нет задачи" }}</span><span class="faint" v-if="d.nextTask"> · {{ d.nextTask }}</span></div>' +
       '</div>',
     computed: {
       late: function () { return !this.d.taskAt || new Date(this.d.taskAt).getTime() < dayStart(nowMs(), 0); }
     },
     methods: {
-      chLabel: chLabel, rub: rub, fmtWhen: fmtWhen,
-      open: function () { go('deal/' + this.d.id); }
+      chLabel: chLabel, rub: rub, fmtWhen: fmtWhen, fmtDate: fmtDate,
+      open: function () { hintDeal(this.d); go('deal/' + this.d.id); }
     }
   };
 
@@ -1298,6 +1412,7 @@
         call('getBoard', {}).then(function (data) {
           if ((self._edits || 0) !== mark) { self.load(true); return; }
           self.data = data;
+          data.open.forEach(hintDeal);
           store.boardData = data;
           self.loading = false;
           self.error = '';
@@ -1794,12 +1909,14 @@
   var PersonPanel = {
     props: ['p', 'templates', 'task', 'hasNext'],
     emits: ['close', 'changed', 'next'],
-    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false }; },
+    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false, removeOpen: false, removeReason: '' }; },
     template:
       '<div class="person-panel panel">' +
       '  <div class="row"><h2 class="grow" style="margin:0">{{ p.name || "Без имени" }}</h2><button class="btn ghost sm" @click="$emit(\'close\')">✕</button></div>' +
       '  <div class="row wrap" style="margin:6px 0 10px"><span class="chip">{{ p.segment || "без сегмента" }}</span><span class="pstatus" :class="cls(p.status)">{{ p.status }}</span>' +
-      '    <a v-if="p.dealId" href="#" @click.prevent="openDeal">сделка {{ p.dealId }} ↗</a><span v-else-if="p.clientId" class="small muted">есть в CRM ({{ p.clientId }})</span></div>' +
+      '    <a v-if="p.dealId || p.crmDealId" class="btn sm primary" href="#" @click.prevent="openDeal">Открыть в CRM ({{ p.dealId || p.crmDealId }})</a>' +
+      '    <button v-else class="btn sm" :disabled="busy" @click="toCrm">Завести в CRM</button></div>' +
+      '  <div v-if="p.status === \'Удалён\'" class="banner"><span class="grow">Удалён из задания: {{ p.note }}</span><button class="btn sm" :disabled="busy" @click="setStatus(\'Не написали\')">Вернуть в задание</button></div>' +
       '  <div class="contacts">' +
       '    <a v-if="p.vk" :href="p.vk" target="_blank" rel="noopener" class="btn sm">ВК ↗</a>' +
       '    <a v-if="p.gcId && gcUrl" :href="gcUrl" target="_blank" rel="noopener" class="btn sm">GetCourse ↗</a>' +
@@ -1824,6 +1941,13 @@
       '  <div class="field"><label>Комментарий</label><input class="input" v-model="note" @change="saveNote" placeholder="например: перезвонить после 15-го"></div>' +
       '  <div class="hint" v-if="p.sentAt">Написали {{ fmtDate(p.sentAt) }}<span v-if="p.channel"> в {{ p.channel }}</span><span v-if="p.repliedAt"> · ответ {{ fmtDate(p.repliedAt) }}</span></div>' +
       '  <button v-if="hasNext" class="btn lg" style="margin-top:12px;width:100%" @click="$emit(\'next\')">Следующий, кому не написали →</button>' +
+      '  <button v-if="p.status !== \'Удалён\'" class="btn danger sm" style="margin-top:12px" @click="removeOpen = true">Удалить из задания</button>' +
+      '  <div v-if="removeOpen" class="overlay" @click.self="removeOpen = false"><div class="modal sm">' +
+      '    <div class="modal-head"><h2>Напишите причину</h2></div>' +
+      '    <div class="modal-body"><p class="small muted" style="margin-top:0">{{ p.name }} пропадёт из этого задания. Из CRM никто не удаляется.</p>' +
+      '      <textarea class="textarea" v-model="removeReason" ref="reason" placeholder="Например: не тот номер, уже учится, просил не писать"></textarea></div>' +
+      '    <div class="modal-foot"><button class="btn" @click="removeOpen = false">Отмена</button><button class="btn danger" :disabled="busy || !removeReason.trim()" @click="remove">Удалить из задания</button></div>' +
+      '  </div></div>' +
       '</div>',
     computed: {
       dicts: function () { return store.boot.dicts; },
@@ -1838,9 +1962,29 @@
       cls: function (s) { return PERSON_STATUS_CLASS[s] || ''; },
       guessChannel: function () { return /insta/i.test(this.p.source) ? 'Инстаграм' : /vk/i.test(this.p.source) || this.p.vk ? 'ВК' : ''; },
       setChannel: function (c) { this.channel = c; writePref('taskChannel', { v: c }); },
-      filled: function (t) { return fillTemplate(t.text, { 'Имя': this.p.firstName || '', 'Менеджер': store.boot.user.name, 'Курс': '', 'Тариф': '', 'Сумма': '' }); },
+      filled: function (t) { return fillTemplate(t.text, { 'Имя': this.p.firstName || '', 'Менеджер': managerName(), 'Курс': '', 'Тариф': '', 'Сумма': '' }); },
       copy: function (v) { copyText(String(v)).then(function () { toast('Скопировано'); }); },
-      openDeal: function () { go('deal/' + this.p.dealId); },
+      openDeal: function () { go('deal/' + (this.p.dealId || this.p.crmDealId)); },
+      toCrm: function () {
+        var self = this;
+        this.busy = true;
+        save(call('personToCrm', this.p.id)).then(function (np) {
+          self.busy = false;
+          self.$emit('changed', np);
+          toast('Заведена сделка ' + np.crmDealId);
+        }, function () { self.busy = false; });
+      },
+      remove: function () {
+        var self = this;
+        this.busy = true;
+        save(call('setPersonStatus', this.p.id, 'Удалён', this.removeReason.trim())).then(function (np) {
+          self.busy = false;
+          self.removeOpen = false;
+          self.$emit('changed', np);
+          self.$emit('close');
+          toast('Убрали из задания');
+        }, function () { self.busy = false; });
+      },
       copyAndMark: function (t) {
         var self = this;
         if (!this.channel) { toast('Выберите, куда пишете: ВК, Инстаграм…', true); return; }
@@ -1933,7 +2077,7 @@
 
       '    <template v-if="tab === \'people\'">' +
       '      <div class="filters">' +
-      '        <button class="btn sm" :class="{on: !fSeg}" @click="fSeg = \'\'">все сегменты <span class="badge">{{ data.people.length }}</span></button>' +
+      '        <button class="btn sm" :class="{on: !fSeg}" @click="fSeg = \'\'">все сегменты <span class="badge">{{ data.stats.total }}</span></button>' +
       '        <button v-for="s in data.task.segments" :key="s" class="btn sm" :class="{on: fSeg === s}" @click="fSeg = s">{{ s }} <span class="badge">{{ countSeg(s) }}</span></button>' +
       '        <select class="select compact" v-model="fStatus"><option value="">все статусы</option><option v-for="s in data.statuses" :key="s">{{ s }}</option></select>' +
       '        <input class="input compact" v-model="q" placeholder="имя, телефон, почта">' +
@@ -1994,6 +2138,7 @@
         return this.data.people.filter(function (p) {
           if (s && p.segment !== s) return false;
           if (st && p.status !== st) return false;
+          if (!st && p.status === 'Удалён') return false;
           if (q && (p.name + ' ' + p.phone + ' ' + p.email).toLowerCase().indexOf(q) < 0) return false;
           return true;
         });
@@ -2018,7 +2163,7 @@
     methods: {
       pct: pctOf,
       cls: function (s) { return PERSON_STATUS_CLASS[s] || ''; },
-      countSeg: function (s) { return this.data.people.filter(function (p) { return p.segment === s; }).length; },
+      countSeg: function (s) { return this.data.people.filter(function (p) { return p.segment === s && p.status !== 'Удалён'; }).length; },
       back: function () { go('tasks'); },
       load: function () {
         var self = this;
@@ -2058,8 +2203,10 @@
       if (st !== 'Не написали') x.sent++;
       if (ANS.indexOf(st) >= 0) x.answered++;
     };
+    s.removed = 0;
     people.forEach(function (p) {
       var st = p.status || 'Не написали';
+      if (st === 'Удалён') { s.removed++; return; }
       s.total++;
       if (st !== 'Не написали') s.sent++;
       if (ANS.indexOf(st) >= 0) s.answered++;
@@ -2072,10 +2219,119 @@
     return s;
   }
 
+  /* ---------- Сообщения: все шаблоны по категориям, с правкой ---------- */
+  var MessagesView = {
+    data: function () { return { all: null, q: '', cat: '', form: null, busy: false, errField: '', greet: null, showHidden: false }; },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Сообщения</h1><span class="muted">шаблоны по категориям — правьте прямо здесь</span>' +
+      '    <button class="btn sm" style="margin-left:auto" @click="checkGreetings">Имя клиента в приветствия</button>' +
+      '    <button class="btn primary sm" @click="edit({})">+ Сообщение</button></div>' +
+      '  <div class="filters">' +
+      '    <input class="input compact grow" style="min-width:220px;flex-basis:100%" v-model="q" placeholder="Поиск по тексту и названию">' +
+      '    <button class="btn sm" :class="{on: !cat}" @click="cat = \'\'">все <span class="badge">{{ visible.length }}</span></button>' +
+      '    <button v-for="c in cats" :key="c" class="btn sm" :class="{on: cat === c}" @click="cat = c">{{ c }}</button>' +
+      '    <label class="small"><input type="checkbox" v-model="showHidden"> скрытые</label>' +
+      '  </div>' +
+      '  <div class="hint" style="margin:-6px 0 12px">В тексте: {Имя} — имя клиента, {Курс}, {Тариф}, {Сумма}, {Менеджер} — {{ manager }}. В карточке клиента всё подставляется само.</div>' +
+      '  <div v-if="form" class="panel tpl-form">' +
+      '    <div class="row wrap" style="align-items:flex-start"><div class="field grow"><label>Название</label><input class="input" :class="{\'has-error\': errField===\'title\'}" v-model="form.title"></div>' +
+      '      <div class="field grow"><label>Категория</label><input class="input" :class="{\'has-error\': errField===\'situation\'}" list="dl-cats" v-model="form.situation" placeholder="Приветствие, Рассрочка…">' +
+      '        <datalist id="dl-cats"><option v-for="c in cats" :key="c" :value="c"></option></datalist></div></div>' +
+      '    <div class="field"><label>Текст</label><textarea class="textarea" style="min-height:180px" :class="{\'has-error\': errField===\'text\'}" v-model="form.text"></textarea></div>' +
+      '    <div class="row"><button class="btn primary" :disabled="busy" @click="submit">Сохранить</button><button class="btn" @click="form = null">Отмена</button>' +
+      '      <label class="small" v-if="form.id" style="margin-left:auto"><input type="checkbox" v-model="form.hide"> скрыть</label></div>' +
+      '  </div>' +
+      '  <div v-if="!all" class="loading">Загружаю…</div>' +
+      '  <template v-else>' +
+      '    <section v-for="g in groups" :key="g.name" class="msg-group"><h2>{{ g.name }} <span class="badge">{{ g.items.length }}</span><span v-if="g.task" class="small muted" style="font-weight:400"> · из задания</span></h2>' +
+      '      <div class="msg-grid"><div v-for="t in g.items" :key="t.id" class="panel msg-card" :class="{hidden: !t.active}">' +
+      '        <div class="row"><b class="grow">{{ t.title }}</b><span v-if="!t.active" class="small muted">скрыт</span></div>' +
+      '        <div class="pre small msg-text" v-html="hl(t.text)"></div>' +
+      '        <div class="row"><button class="btn sm" @click="copy(t)">📋 Скопировать</button><button class="btn ghost sm" @click="edit(t)">изменить</button></div>' +
+      '      </div></div></section>' +
+      '    <div v-if="!groups.length" class="panel muted">Ничего не найдено</div>' +
+      '  </template>' +
+      '  <div v-if="greet" class="overlay" @click.self="greet = null"><div class="modal">' +
+      '    <div class="modal-head"><h2>Имя клиента в приветствия</h2><button class="btn ghost sm" style="margin-left:auto" @click="greet = null">✕</button></div>' +
+      '    <div class="modal-body"><p v-if="!greet.changes.length" class="muted">Во всех приветствиях имя уже стоит — менять нечего.</p>' +
+      '      <template v-else><p class="small muted" style="margin-top:0">В начале этих шаблонов появится имя клиента. Шаблон «как к вам обращаться» не трогаем.</p>' +
+      '        <div v-for="c in greet.changes" :key="c.id" class="greet-row"><b>{{ c.title }}</b><div class="small"><s class="muted">{{ c.before }}</s></div><div class="small">{{ c.after }}</div></div></template></div>' +
+      '    <div class="modal-foot"><button class="btn" @click="greet = null">Закрыть</button><button v-if="greet.changes.length" class="btn primary" :disabled="busy" @click="applyGreetings">Изменить {{ greet.changes.length }}</button></div>' +
+      '  </div></div>' +
+      '</div>',
+    computed: {
+      manager: function () { return managerName(); },
+      visible: function () { var h = this.showHidden; return (this.all || []).filter(function (t) { return h || t.active; }); },
+      cats: function () {
+        var seen = {};
+        return this.visible.map(function (t) { return t.situation || 'Без категории'; }).filter(function (c) { return seen[c] ? false : (seen[c] = true); });
+      },
+      groups: function () {
+        var q = this.q.trim().toLowerCase();
+        var cat = this.cat;
+        var map = {}, order = [];
+        this.visible.forEach(function (t) {
+          var c = t.situation || 'Без категории';
+          if (cat && c !== cat) return;
+          if (q && (t.title + ' ' + t.text + ' ' + c).toLowerCase().indexOf(q) < 0) return;
+          if (!map[c]) { map[c] = []; order.push(c); }
+          map[c].push(t);
+        });
+        return order.map(function (n) { return { name: n, items: map[n], task: map[n].some(function (t) { return t.taskId; }) }; });
+      }
+    },
+    created: function () { this.load(); },
+    methods: {
+      hl: function (text) {
+        return String(text || '').replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; })
+          .replace(/\{(Имя|Курс|Тариф|Сумма|Менеджер)\}/g, '<mark>{$1}</mark>');
+      },
+      load: function () {
+        var self = this;
+        call('listTemplates').then(function (list) {
+          self.all = list;
+          store.boot.templates = list.filter(function (t) { return t.active; });
+        }, function (err) { toast(err.error, true); });
+      },
+      copy: function (t) { copyText(t.text).then(function () { toast('Скопировано — {Имя} замените на имя клиента'); }); },
+      edit: function (t) {
+        this.form = { id: t.id || '', title: t.title || '', situation: t.situation || this.cat || '', text: t.text || '', taskId: t.taskId || '', segment: t.segment || '', hide: t.id ? !t.active : false };
+        this.errField = '';
+        window.scrollTo(0, 0);
+      },
+      submit: function () {
+        var self = this;
+        var f = this.form;
+        this.busy = true;
+        save(call('saveTemplate', { id: f.id, title: f.title, situation: f.situation, text: f.text, taskId: f.taskId, segment: f.segment, active: !f.hide })).then(function () {
+          self.busy = false;
+          self.form = null;
+          toast('Сохранено');
+          self.load();
+        }, function (err) { self.busy = false; self.errField = err.field || ''; });
+      },
+      checkGreetings: function () {
+        var self = this;
+        call('addNameToGreetings', false).then(function (r) { self.greet = r; }, function (err) { toast(err.error, true); });
+      },
+      applyGreetings: function () {
+        var self = this;
+        this.busy = true;
+        save(call('addNameToGreetings', true)).then(function (r) {
+          self.busy = false;
+          self.greet = null;
+          toast('Имя добавлено в ' + r.changes.length + ' шабл.');
+          self.load();
+        }, function () { self.busy = false; });
+      }
+    }
+  };
+
   /* ---------- Корень ---------- */
   var Root = {
     components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox,
-      BoardView: BoardView, ReportView: ReportView, GuideView: GuideView, TasksView: TasksView, TaskView: TaskView },
+      BoardView: BoardView, ReportView: ReportView, GuideView: GuideView, TasksView: TasksView, TaskView: TaskView, MessagesView: MessagesView },
     template:
       '<div v-if="!store.boot" class="loading">{{ store.bootError || "Загрузка…" }}</div>' +
       '<template v-else>' +
@@ -2083,6 +2339,7 @@
       '    <span class="brand">Учёт в народ · CRM</span>' +
       '    <nav class="tabs"><a v-for="t in tabs" :key="t.hash" class="tab" :class="{active: store.route.name === t.name || store.route.name === t.also}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)">{{ t.title }}</a></nav>' +
       '    <search-box ref="search"></search-box>' +
+      '    <a class="btn ghost sm help-mobile" href="#report" @click.prevent="go(\'report\')" title="Отчёт">▤</a>' +
       '    <a class="btn ghost sm help-mobile" href="#guide" @click.prevent="go(\'guide\')" title="Как работать">?</a>' +
       '    <button class="btn primary" @click="store.newLeadOpen = true" title="Горячая клавиша N">+ Обращение</button>' +
       '    <span class="save-state">{{ saveState }}</span>' +
@@ -2097,6 +2354,7 @@
       '    <report-view v-else-if="store.route.name === \'report\'"></report-view>' +
       '    <guide-view v-else-if="store.route.name === \'guide\'"></guide-view>' +
       '    <tasks-view v-else-if="store.route.name === \'tasks\'"></tasks-view>' +
+      '    <messages-view v-else-if="store.route.name === \'messages\'"></messages-view>' +
       '    <task-view v-else-if="store.route.name === \'task\'" :id="store.route.id"></task-view>' +
       '  </main>' +
       '  <nav class="bottom-nav">' +
@@ -2114,6 +2372,7 @@
           { name: 'today', hash: 'today', title: 'Сегодня', ico: '☀' },
           { name: 'tasks', hash: 'tasks', title: 'Задания', ico: '✉', also: 'task' },
           { name: 'board', hash: 'board', title: 'Доска', ico: '▦' },
+          { name: 'messages', hash: 'messages', title: 'Сообщения', ico: '✎' },
           { name: 'report', hash: 'report', title: 'Отчёт', ico: '▤' },
           { name: 'guide', hash: 'guide', title: 'Как работать', short: 'Помощь', ico: '?' }
         ];

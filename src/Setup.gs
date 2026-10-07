@@ -8,6 +8,8 @@
 var DEFAULT_SETTINGS = [
   { key: 'GC_USER_URL', value: 'https://uvnschool.ru/user/control/user/update/id/{id}' },
   { key: 'GC_ORDER_URL', value: '' },
+  { key: 'MANAGER_NAME', value: 'Максим' },
+  { key: 'GC_DIALOG_URL', value: 'https://uvnschool.ru/pl/tasks/resp?filter%5Bobject_type_id%5D=55#respId={id}' },
   { key: 'FOLLOWUP_DAYS', value: 1 },
   { key: 'TASK_DEFAULT_TIME', value: '10:00' },
   { key: 'NEW_DEAL_ALERT_MIN', value: 10 },

@@ -34,6 +34,7 @@ function bootstrapData_(user) {
 function getToday() { return api_(function (user) { return svcGetToday_(user); }); }
 function listDeals(filter) { return api_(function (user) { return svcListDeals_(user, filter || {}); }); }
 function getDeal(id) { return api_(function (user) { return svcGetDeal_(user, id); }); }
+function getDeals(ids) { return api_(function (user) { return svcGetDeals_(user, ids || []); }); }
 function findDuplicates(client) { return api_(function (user) { return svcFindDuplicates_(user, client || {}); }); }
 function createDeal(payload) { return api_(function (user) { return svcCreateDeal_(user, payload || {}); }); }
 function updateDeal(id, patch) { return api_(function (user) { return svcUpdateDeal_(user, id, patch || {}); }); }
@@ -74,10 +75,14 @@ function clientView_(c) {
 function dealView_(d, client, stats) {
   var v = serialize_(d);
   v.orderNo = v.orderNo === '' ? '' : String(v.orderNo);
-  v.clientName = client ? String(client.name) : '';
-  v.nick = client ? String(client.nick || '') : '';
-  v.dialogUrl = client ? String(client.dialogUrl || '') : '';
-  v.clientCheck = client ? String(client.check || '') : '';
+  // client === undefined — ответ на запись: поля клиента не трогаем, у сайта они уже есть.
+  if (client !== undefined) {
+    v.clientName = client ? String(client.name) : '';
+    v.nick = client ? String(client.nick || '') : '';
+    v.dialogUrl = client ? String(client.dialogUrl || '') : '';
+    v.gcId = client && client.gcId !== '' ? String(client.gcId) : '';
+    v.clientCheck = client ? String(client.check || '') : '';
+  }
   if (stats) {
     // Без stats (ответ на запись) этих полей нет — клиент оставляет свои значения.
     var s = stats[String(d.id)];
@@ -118,15 +123,26 @@ function svcGetToday_(user) {
   var today = [];
   var fresh = [];
   var counters = { created: 0, touches: 0, paid: 0, paidSum: 0, monthPaid: 0, monthPaidSum: 0 };
+  var lists = { created: [], touches: [], paid: [] };
+  var brief = function (d) {
+    var c = clients[String(d.clientId)];
+    return { id: d.id, clientName: c ? String(c.name) : '', channel: d.channel, stage: d.stage, course: d.course, amount: d.amount, request: d.request };
+  };
+  var dealsById = {};
   var monthStart = mskMonthStart_(now, 0);
   var monthEnd = mskMonthStart_(now, 1);
   counters.month = monthStart.toISOString();
 
   deals.forEach(function (d) {
-    if (isDate_(d.createdAt) && d.createdAt >= dayStart && d.createdAt < dayEnd) counters.created++;
+    dealsById[String(d.id)] = d;
+    if (isDate_(d.createdAt) && d.createdAt >= dayStart && d.createdAt < dayEnd) {
+      counters.created++;
+      lists.created.push(Object.assign(brief(d), { time: d.createdAt.toISOString() }));
+    }
     if (d.stage === STAGE.PAID && isDate_(d.paidAt) && d.paidAt >= dayStart && d.paidAt < dayEnd) {
       counters.paid++;
       counters.paidSum += toNumber_(d.amount);
+      lists.paid.push(brief(d));
     }
     if (d.stage === STAGE.PAID && isDate_(d.paidAt) && d.paidAt >= monthStart && d.paidAt < monthEnd) {
       counters.monthPaid++;
@@ -139,14 +155,20 @@ function svcGetToday_(user) {
     else if (d.taskAt < dayEnd) today.push(v);
   });
   touches.forEach(function (t) {
-    if (t.type !== TOUCH.STAGE && isDate_(t.date) && t.date >= dayStart && t.date < dayEnd) counters.touches++;
+    if (t.type !== TOUCH.STAGE && isDate_(t.date) && t.date >= dayStart && t.date < dayEnd) {
+      counters.touches++;
+      var d = dealsById[String(t.dealId)];
+      lists.touches.push({ id: String(t.dealId), clientName: d ? brief(d).clientName : '', type: t.type, channel: String(t.channel || (d && d.channel) || ''),
+        time: t.date.toISOString(), text: String(t.text || '').slice(0, 120) });
+    }
   });
+  ['created', 'touches'].forEach(function (k) { lists[k].sort(function (a, b) { return b.time.localeCompare(a.time); }); });
 
   var byTask = function (a, b) { return (a.taskAt || '').localeCompare(b.taskAt || ''); };
   overdue.sort(byTask);
   today.sort(byTask);
   fresh.sort(function (a, b) { return (a.createdAt || '').localeCompare(b.createdAt || ''); });
-  return { overdue: overdue, today: today, fresh: fresh, counters: counters, now: now.toISOString() };
+  return { overdue: overdue, today: today, fresh: fresh, counters: counters, lists: lists, now: now.toISOString() };
 }
 
 /* ---------- Список и поиск ---------- */
@@ -186,26 +208,48 @@ function svcListDeals_(user, filter) {
 /* ---------- Карточка ---------- */
 
 function svcGetDeal_(user, id) {
-  var dealsT = new Table_(SHEET.DEALS);
-  var deal = dealsT.find('id', id);
-  if (!deal) throw userError_('Сделка ' + id + ' не найдена.');
-  var client = new Table_(SHEET.CLIENTS).find('id', deal.clientId);
-  var allDeals = dealsT.all();
+  var cards = svcGetDeals_(user, [id]);
+  if (!cards[id]) throw userError_('Сделка ' + id + ' не найдена.');
+  return cards[id];
+}
+
+/**
+ * Несколько карточек за один запрос: сайт заранее подгружает карточки из «Сегодня» и доски,
+ * чтобы они открывались мгновенно. Листы читаются по одному разу на всю пачку.
+ */
+function svcGetDeals_(user, ids) {
+  var want = {};
+  (ids || []).slice(0, 150).forEach(function (id) { want[String(id)] = true; });
+  var deals = new Table_(SHEET.DEALS).all();
+  var clients = indexBy_(new Table_(SHEET.CLIENTS).all(), 'id');
   var touchesAll = new Table_(SHEET.TOUCHES).all();
   var stats = touchStats_(touchesAll);
   var users = usersByEmail_();
-  var touches = touchesAll
-    .filter(function (t) { return String(t.dealId) === String(id); })
-    .sort(function (a, b) {
-      var ta = isDate_(a.date) ? a.date.getTime() : 0;
-      var tb = isDate_(b.date) ? b.date.getTime() : 0;
-      return tb - ta || b._row - a._row;
-    })
-    .map(function (t) { return touchView_(t, users); });
-  var other = allDeals
-    .filter(function (d) { return String(d.clientId) === String(deal.clientId) && String(d.id) !== String(id); })
-    .map(function (d) { return dealView_(d, client, stats); });
-  return { deal: dealView_(deal, client, stats), client: clientView_(client), touches: touches, otherDeals: other };
+  var byDeal = {};
+  touchesAll.forEach(function (t) {
+    var k = String(t.dealId);
+    if (want[k]) (byDeal[k] = byDeal[k] || []).push(t);
+  });
+  var byClient = {};
+  deals.forEach(function (d) { (byClient[String(d.clientId)] = byClient[String(d.clientId)] || []).push(d); });
+  var out = {};
+  deals.forEach(function (deal) {
+    var id = String(deal.id);
+    if (!want[id]) return;
+    var client = clients[String(deal.clientId)] || null;
+    var touches = (byDeal[id] || [])
+      .sort(function (a, b) {
+        var ta = isDate_(a.date) ? a.date.getTime() : 0;
+        var tb = isDate_(b.date) ? b.date.getTime() : 0;
+        return tb - ta || b._row - a._row;
+      })
+      .map(function (t) { return touchView_(t, users); });
+    var other = (byClient[String(deal.clientId)] || [])
+      .filter(function (d) { return String(d.id) !== id; })
+      .map(function (d) { return dealView_(d, client, stats); });
+    out[id] = { deal: dealView_(deal, client, stats), client: clientView_(client), touches: touches, otherDeals: other };
+  });
+  return out;
 }
 
 /* ---------- Клиенты ---------- */
@@ -420,11 +464,11 @@ function svcUpdateDeal_(user, id, patch) {
   });
 }
 
+/** Ответ на запись: лист «Клиенты» не читаем — имя и контакты клиента у сайта уже есть. */
 function dealResult_(res) {
-  var client = new Table_(SHEET.CLIENTS).find('id', res.deal.clientId);
   var users = usersByEmail_();
   return {
-    deal: dealView_(res.deal, client, null),
+    deal: dealView_(res.deal, undefined, null),
     newTouches: res.newTouches.map(function (t) { return touchView_(t, users); })
   };
 }
