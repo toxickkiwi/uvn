@@ -312,6 +312,17 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await p.click('.person-panel >> text=Вернуть в задание');
     await p.waitForSelector('.person-panel >> text=Не пишем — указать причину', { timeout: 15000 });
     await p.selectOption('select:has(option:text-is("Удалён"))', '');
+    // Канал у каждого свой: у Ольги (пришла из ВК) — ВК, хотя Анне писали в Инстаграм.
+    let ch = await p.locator('.person-panel .seg .btn.on').first().innerText();
+    if (ch !== 'ВК') throw new Error('канал Ольги: ' + ch);
+    await p.click('.person-panel .seg >> text=Макс');
+    await p.waitForTimeout(1500);
+    await p.click('.prow:has-text("Анна")');
+    ch = await p.locator('.person-panel .seg .btn.on').first().innerText();
+    if (ch !== 'Инстаграм') throw new Error('канал Анны после выбора у Ольги: ' + ch);
+    await p.click('.prow:has-text("Ольга")');
+    ch = await p.locator('.person-panel .seg .btn.on').first().innerText();
+    if (ch !== 'Макс') throw new Error('канал Ольги не сохранился: ' + ch);
     await p.click('.person-panel >> text=Не пишем — указать причину');
     await p.click('.modal >> text=Прямо сейчас проходит курс');
     await p.click('.modal .modal-foot .btn.primary');

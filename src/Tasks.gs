@@ -28,6 +28,7 @@ function saveTask(task) { return api_(function (user) { return svcSaveTask_(user
 function saveTaskTemplate(tpl) { return api_(function (user) { return svcSaveTaskTemplate_(user, tpl || {}); }); }
 function importPeople(taskId, segment, rows) { return api_(function (user) { return svcImportPeople_(user, taskId, segment, rows || []); }); }
 function markPersonSent(id, templateId, channel) { return api_(function (user) { return svcMarkPersonSent_(user, id, templateId, channel); }); }
+function setPersonChannel(id, channel) { return api_(function (user) { return svcSetPersonChannel_(user, id, channel); }); }
 function setPersonStatus(id, status, note) { return api_(function (user) { return svcSetPersonStatus_(user, id, status, note); }); }
 function personToCrm(id) { return api_(function (user) { return svcPersonToCrm_(user, id); }); }
 function saveTemplate(tpl) { return api_(function (user) { return svcSaveTemplate_(user, tpl || {}); }); }
@@ -350,6 +351,17 @@ function svcMarkPersonSent_(user, id, templateId, channel) {
     var patch = { templateId: String(templateId || '').trim(), channel: ch, sentAt: now_(), updatedAt: now_() };
     if (!p.status || p.status === PERSON_STATUS.TODO) patch.status = PERSON_STATUS.SENT;
     return personView_(pt.update(p._row, patch));
+  });
+}
+
+/** Канал, в который пишем этому человеку, — у каждого свой, сохраняется сразу. */
+function svcSetPersonChannel_(user, id, channel) {
+  var ch = String(channel || '').trim();
+  if (ch && getRef_().dicts.channels.indexOf(ch) < 0) throw userError_('Выберите канал из списка.', 'channel');
+  return withLock_(function () {
+    var pt = new Table_(SHEET.PEOPLE);
+    var p = personRow_(pt, id);
+    return personView_(pt.update(p._row, { channel: ch, updatedAt: now_() }));
   });
 }
 

@@ -515,6 +515,8 @@ function selfTestCases_() {
       if (!crm.crmDealId) throw new Error('сделка не заведена');
       assertEq_(crm.status, 'Не написали', 'статус не меняется');
       assertThrows_(function () { svcSetPersonStatus_(u, z.id, 'Не пишем', ' '); }, 'note', '«Не пишем» без причины');
+      assertEq_(svcSetPersonChannel_(u, z.id, 'Макс').channel, 'Макс', 'канал человека');
+      assertThrows_(function () { svcSetPersonChannel_(u, z.id, 'Голубь'); }, 'channel', 'канал не из списка');
       var sk = svcSetPersonStatus_(u, z.id, 'Не пишем', 'Прямо сейчас проходит ЯБ');
       assertEq_([sk.status, sk.note], ['Не пишем', 'Прямо сейчас проходит ЯБ'], 'не пишем с причиной');
       var st2 = svcGetTask_(u, task.id).stats;

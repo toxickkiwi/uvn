@@ -2469,7 +2469,7 @@
   var PersonPanel = {
     props: ['p', 'templates', 'task', 'hasNext'],
     emits: ['close', 'changed', 'next'],
-    data: function () { return { channel: readPref('taskChannel', { v: '' }).v || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false, removeOpen: false, removeReason: '', reasonMode: 'remove', copiedId: null }; },
+    data: function () { return { channel: this.p.channel || this.guessChannel(), busy: false, note: this.p.note || '', showAll: false, removeOpen: false, removeReason: '', reasonMode: 'remove', copiedId: null }; },
     template:
       '<div class="person-panel panel">' +
       '  <div class="row"><h2 class="grow" style="margin:0">{{ p.name || "Без имени" }}</h2><button class="btn ghost sm" @click="$emit(\'close\')">✕</button></div>' +
@@ -2523,12 +2523,25 @@
       shown: function () { return this.showAll ? this.own.concat(this.others) : this.own; },
       skipReasons: function () { return ['Прямо сейчас проходит курс', 'Уже купил', 'Уже учится у нас', 'Просил не писать']; }
     },
-    watch: { p: function (v, old) { this.note = v.note || ''; if (!old || old.id !== v.id) this.copiedId = null; } },
+    watch: {
+      p: function (v, old) {
+        this.note = v.note || '';
+        // Канал — у каждого человека свой: другой человек → его канал (или угадываем по источнику).
+        if (!old || old.id !== v.id) { this.copiedId = null; this.channel = v.channel || this.guessChannel(); }
+        else if (v.channel) this.channel = v.channel;
+      }
+    },
     methods: {
       fmtDate: fmtDate,
       cls: function (s) { return PERSON_STATUS_CLASS[s] || ''; },
       guessChannel: function () { return /insta/i.test(this.p.source) ? 'Инстаграм' : /vk/i.test(this.p.source) || this.p.vk ? 'ВК' : ''; },
-      setChannel: function (c) { this.channel = c; writePref('taskChannel', { v: c }); },
+      setChannel: function (c) {
+        var self = this;
+        if (this.p.channel === c) return;
+        this.channel = c;
+        this.$emit('changed', Object.assign({}, this.p, { channel: c }));
+        save(call('setPersonChannel', this.p.id, c)).then(function (np) { self.$emit('changed', np); });
+      },
       filled: function (t) { return fillTemplate(t.text, { 'Имя': this.p.firstName || '', 'Менеджер': managerName(), 'Курс': '', 'Тариф': '', 'Сумма': '' }); },
       copy: function (v) { copyText(String(v)).then(function () { toast('Скопировано'); }); },
       openDeal: function () { go('deal/' + (this.p.dealId || this.p.crmDealId)); },
@@ -2672,7 +2685,7 @@
       '          <div v-if="!filtered.length" class="empty">Никого не найдено</div>' +
       '          <div v-for="p in filtered.slice(0, limit)" :key="p.id" class="prow" :class="{active: current && current.id === p.id}" @click="current = p">' +
       '            <div class="grow" style="min-width:0"><b>{{ p.name || "Без имени" }}</b> <span class="small muted">{{ p.segment }}</span>' +
-      '              <div class="small muted ellipsis">{{ [p.phone, p.email].filter(Boolean).join(" · ") }}<span v-if="p.clientId"> · в CRM</span></div>' +
+      '              <div class="small muted ellipsis">{{ [p.phone, p.email].filter(Boolean).join(" · ") }}<span v-if="p.clientId"> · в CRM</span><span v-if="p.channel && p.status !== \'Не написали\'"> · {{ p.channel }}</span></div>' +
       '              <div class="small skip-reason ellipsis" v-if="p.status === \'Не пишем\' && p.note">не пишем: {{ p.note }}</div></div>' +
       '            <span class="pstatus" :class="cls(p.status)">{{ p.status }}</span>' +
       '          </div>' +
