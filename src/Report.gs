@@ -34,7 +34,8 @@ function computeReport_(deals, from, toExclusive, touches) {
     repeatLeads: 0,
     priorContact: { 'Да': 0, 'Нет': 0, 'Не отмечено': 0 },
     activeDialogs: 0,
-    activeByChannel: {}
+    activeByChannel: {},
+    byScore: { '1': 0, '2': 0, '3': 0, '—': 0 }
   };
   var inc = function (obj, key, n) {
     var k = String(key || '').trim() || '—';
@@ -68,6 +69,7 @@ function computeReport_(deals, from, toExclusive, touches) {
       inc(r.byChannel, d.channel);
       inc(r.byPotok, d.potok);
       inc(r.funnel, d.stage);
+      r.byScore[normScore_(d.score) || '—']++;
       if (d.stage === STAGE.PAID) r.paidFromLeads++;
       if (d.stage === STAGE.LOST) inc(r.lostReasons, d.lostReason);
     }

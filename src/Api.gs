@@ -91,6 +91,7 @@ function dealView_(d, client, stats) {
   }
   v.imported = String(d.source || '') !== SOURCE_CRM;
   v.prospect = toBool_(d.prospect);
+  v.score = normScore_(d.score);
   v.color = dealColor_(d);
   return v;
 }
@@ -122,7 +123,7 @@ function svcGetToday_(user) {
   var overdue = [];
   var today = [];
   var fresh = [];
-  var counters = { created: 0, touches: 0, paid: 0, paidSum: 0, monthPaid: 0, monthPaidSum: 0 };
+  var counters = { created: 0, touches: 0, paid: 0, paidSum: 0, monthPaid: 0, monthPaidSum: 0, monthCreated: 0 };
   var lists = { created: [], touches: [], paid: [] };
   var brief = function (d) {
     var c = clients[String(d.clientId)];
@@ -144,6 +145,7 @@ function svcGetToday_(user) {
       counters.paidSum += toNumber_(d.amount);
       lists.paid.push(brief(d));
     }
+    if (isDate_(d.createdAt) && d.createdAt >= monthStart && d.createdAt < monthEnd) counters.monthCreated++;
     if (d.stage === STAGE.PAID && isDate_(d.paidAt) && d.paidAt >= monthStart && d.paidAt < monthEnd) {
       counters.monthPaid++;
       counters.monthPaidSum += toNumber_(d.amount);
@@ -362,6 +364,7 @@ function svcCreateDeal_(user, payload) {
       owner: user.email,
       updatedAt: now,
       prospect: toBool_(dealIn.prospect),
+      score: normScore_(dealIn.score),
       priorContact: normPrior_(dealIn.priorContact),
       priorWhere: String(dealIn.priorWhere || '').trim(),
       priorWhen: parseTaskDate_(dealIn.priorWhen, '00:00'),
@@ -409,7 +412,7 @@ function settingsWithDefaults_() {
 /* ---------- Изменение сделки ---------- */
 
 var DEAL_EDITABLE = ['potok', 'channel', 'request', 'course', 'tariff', 'amount', 'payMethod', 'orderNo',
-  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt', 'prospect',
+  'paidAt', 'stage', 'lostReason', 'nextTask', 'taskAt', 'prospect', 'score',
   'priorContact', 'priorWhere', 'priorWhen', 'priorNote'];
 
 /**

@@ -359,8 +359,93 @@ function selfTestCases_() {
       assertEq_(dealColor_({ stage: 'Новое', prospect: '' }), 'white', 'без перспектив');
       var d = testDeal_('Входящее', '@t.color', { prospect: true }).deal;
       assertEq_([d.prospect, d.color], [true, 'yellow'], 'новое обращение с перспективой');
+      assertEq_(d.score, '3', 'перспектива = оценка 3');
       var upd = svcUpdateDeal_(u, d.id, { prospect: false }).deal;
-      assertEq_([upd.prospect, upd.color], [false, 'white'], 'снята перспектива');
+      assertEq_([upd.prospect, upd.color, upd.score], [false, 'white', '2'], 'снята перспектива');
+    }],
+    ['Оценка клиента 1–3: оценка 3 — жёлтый, другие — нет', function () {
+      var d = testDeal_('Входящее', '@t.score', { score: 2 }).deal;
+      assertEq_([d.score, d.prospect, d.color], ['2', false, 'white'], 'оценка 2');
+      var a = svcUpdateDeal_(u, d.id, { score: '3' }).deal;
+      assertEq_([a.score, a.prospect, a.color], ['3', true, 'yellow'], 'оценка 3');
+      var b = svcUpdateDeal_(u, d.id, { score: '1' }).deal;
+      assertEq_([b.score, b.prospect, b.color], ['1', false, 'white'], 'оценка 1');
+      var c = svcUpdateDeal_(u, d.id, { score: '' }).deal;
+      assertEq_([c.score, c.prospect], ['', false], 'оценку сняли');
+      assertEq_([normScore_(3), normScore_('2.0'), normScore_('1(Не заинтересован)'), normScore_('13'), normScore_('')], ['3', '2', '1', '', '']);
+      var r = computeReport_(new Table_(SHEET.DEALS).all(), mskDayStart_(TEST_NOW, -30), mskDayStart_(TEST_NOW, 1), []);
+      if (!(r.byScore['—'] >= 1)) throw new Error('отчёт по оценкам: ' + JSON.stringify(r.byScore));
+    }],
+    ['Перенос из таблицы: имена, ссылки, каналы, цвета', function () {
+      assertEq_(legacyName_('Anna Testova (@anna_testova_77) • Instagram'), 'Anna Testova');
+      assertEq_(legacyName_('(Людмила)@ludmila_test2020'), 'Людмила');
+      assertEq_(legacyName_('Елена elena_test1'), 'Елена');
+      assertEq_(legacyName_('Яна @yana_test'), 'Яна');
+      assertEq_(legacyName_('nadya__test'), 'nadya__test');
+      assertEq_(legacyContact_('https://www.instagram.com/irina.test5/'), { nick: 'irina.test5' });
+      assertEq_(legacyContact_('https://www.instagram.com/direct/t/1078/'), { dialogUrl: 'https://www.instagram.com/direct/t/1078/' });
+      assertEq_(legacyContact_('https://uvnschool.ru/user/control/user/update/id/111222333'), { gcId: '111222333' });
+      assertEq_(legacyContact_('https://uvnschool.ru/sales/control/deal/update/id/900000001'), {}, 'заказ — не контакт');
+      assertEq_(legacyContact_('https://uvnschool.ru/pl/tasks/resp'), {}, 'общая ссылка на ответы');
+      var chs = DEFAULT_DICTS['Каналы'];
+      assertEq_(['Инст', 'Вк', 'эл.почта', 'ГетКурс', 'ТГ', 'Макс', 'голубь'].map(function (x) { return legacyChannel_(x, chs); }),
+        ['Инстаграм', 'ВК', 'Почта', 'GetCourse', 'ТГ', 'Макс', '']);
+      assertEq_(['FFFFFFFF', 'FFF2CC', 'FFD9EAD3', '', 'FF000000'].map(legacyColor_), ['white', 'yellow', 'green', '', '']);
+      assertEq_(legacyTemplateText_('[Имя], добрый день!'), '{Имя}, добрый день!');
+    }],
+    ['Перенос «Обращения»: дополнение, новая сделка, повтор ничего не меняет', function () {
+      var a = svcCreateDeal_(u, { client: { name: 'Светлана', nick: 'svet.old' }, deal: { channel: 'Инстаграм', request: 'Писала УСН когда-то' } });
+      var dt = new Table_(SHEET.DEALS);
+      dt.update(dt.find('id', a.dealId)._row, { source: 'Нов Обр, строка 30' });
+      var rows = [
+        { row: 30, no: 10, name: 'Светлана svet.old', link: 'https://www.instagram.com/svet.old/', channel: 'Инст', date: '2026-10-02',
+          request: 'Писала УСН когда-то', second: '', plan: 'Нет никакого ответа', planColor: 'FFFFFF', score: '1' },
+        { row: 31, no: 11, name: 'Оксана Новая', link: 'https://www.instagram.com/oksana.new/', channel: 'Инст', date: '2026-10-03',
+          request: 'Сомневается какой курс', second: '2026-10-06', plan: 'Отправил ссылки на УСН и ОСН', planColor: 'FFF2CC', score: '2' },
+        { row: 32, no: 12, name: 'Вера Оплата', link: 'https://uvnschool.ru/sales/control/deal/update/id/1', channel: 'ГетКурс', date: '2026-09-29',
+          request: 'Оформила комбо', plan: '-', planColor: 'D9EAD3', score: '3', paid: 'Да', orderNo: '40001', amount: '89900', payDate: '2026-09-30' },
+        { row: 33, no: 13, name: 'Без канала', channel: 'голубь', date: '2026-10-03', request: 'x' }
+      ];
+      var plan = svcLegacyDeals_(u, rows, 'Обращения', null).items;
+      assertEq_(plan.map(function (x) { return x.kind; }), ['update', 'new', 'new', 'skip'], 'план');
+      var done = svcLegacyDeals_(u, rows, 'Обращения', [30, 31, 32]);
+      assertEq_([done.created, done.updated, done.failed.length], [2, 1, 0], 'перенесено');
+      var old = svcGetDeal_(u, a.dealId);
+      assertEq_([old.deal.stage, old.deal.lostReason, old.deal.score], ['Отказ', 'Не отвечает', '1'], 'белая строка — больше не в работе');
+      if (!old.touches.some(function (t) { return t.text === 'Нет никакого ответа'; })) throw new Error('заметка из плана не добавлена');
+      var made = svcListDeals_(u, { query: 'oksana.new' })[0];
+      assertEq_([made.stage, made.channel, made.score, made.source], ['В диалоге', 'Инстаграм', '2', 'Обращения, строка 31'], 'новая из жёлтой строки');
+      var paid = svcListDeals_(u, { query: '40001' })[0];
+      assertEq_([paid.stage, paid.amount, paid.payMethod, paid.color], ['Оплачено', 89900, 'Полная', 'green'], 'оплата');
+      var again = svcLegacyDeals_(u, rows, 'Обращения', null).items;
+      assertEq_(again.map(function (x) { return x.kind; }), ['same', 'same', 'same', 'skip'], 'повторный перенос');
+    }],
+    ['Перенос рассылки в задание: статусы, варианты текста, повтор', function () {
+      var input = {
+        name: 'Выпускники ОСН', segment: 'Все',
+        templates: [{ n: '1', text: 'Имя, добрый день! Вариант один' }, { n: '2', text: '[Имя], добрый день! Вариант два' }],
+        people: [
+          { firstName: 'Ирина', lastName: 'Тестова', email: 'ir@ya.ru', sent: 'Да', variant: '1', sentAt: '2026-09-24' },
+          { firstName: 'Анна', lastName: 'К', email: 'anna@ya.ru', sent: 'Да', variant: '2', sentAt: '2026-09-24', replied: ' Да', channel: 'эл. почта' },
+          { firstName: 'Олеся', email: 'ol@ya.ru', sent: 'Нет', note: 'Уже на БК' },
+          { firstName: 'Вера', email: 'vera@ya.ru' },
+          { firstName: 'Ирина повтор', email: 'IR@ya.ru', sent: 'Да' }
+        ]
+      };
+      var pv = svcLegacyTask_(u, input, false);
+      assertEq_([pv.isNew, pv.add, pv.skipped, pv.templatesNew], [true, 4, 1, 2], 'просмотр');
+      var ap = svcLegacyTask_(u, input, true);
+      var t = svcGetTask_(u, ap.taskId);
+      assertEq_(t.templates.map(function (x) { return x.text; }), ['{Имя}, добрый день! Вариант один', '{Имя}, добрый день! Вариант два'], 'шаблоны');
+      var st = t.stats;
+      assertEq_([st.total, st.sent, st.answered, st.removed], [3, 2, 1, 1], 'статистика');
+      var anna = t.people.filter(function (p) { return p.firstName === 'Анна'; })[0];
+      assertEq_([anna.status, anna.channel], ['Ответил', 'Почта'], 'ответ и канал');
+      var ol = t.people.filter(function (p) { return p.firstName === 'Олеся'; })[0];
+      assertEq_([ol.status, ol.note], ['Удалён', 'Уже на БК'], 'не писали — убрана с причиной');
+      input.people[3].sent = 'Да';
+      var pv2 = svcLegacyTask_(u, input, false);
+      assertEq_([pv2.isNew, pv2.add, pv2.update, pv2.templatesNew], [false, 0, 1, 0], 'повтор: обновится только Вера');
     }],
     ['Поток «Исходящее»: стадия «В диалоге», задача «Написать повторно» завтра', function () {
       var d = testDeal_('Исходящее', '@t.out').deal;

@@ -37,7 +37,8 @@ var DROPDOWNS = [
   { sheet: 'Касания', header: 'Канал', dict: 'Каналы' },
   { sheet: 'Сделки', header: 'Где был контакт', dict: 'Каналы' },
   { sheet: 'Сделки', header: 'Был контакт', list: ['Да', 'Нет'] },
-  { sheet: 'Участники', header: 'Статус', list: ['Не написали', 'Написали', 'Ответил', 'Не интересно', 'Купил'] },
+  { sheet: 'Сделки', header: 'Оценка', list: ['1', '2', '3'] },
+  { sheet: 'Участники', header: 'Статус', list: ['Не написали', 'Написали', 'Ответил', 'Не интересно', 'Купил', 'Удалён'] },
   { sheet: 'Участники', header: 'Канал', dict: 'Каналы' }
 ];
 
@@ -76,6 +77,7 @@ function setupSpreadsheet() {
     applyDropdowns_(ss, log);
     applyTextFormats_(ss);
     applyProspectColumn_(ss);
+    migrateScore_(ss, log);
     applyRowColors_(ss);
 
     clearRefCache_();
@@ -239,6 +241,27 @@ function applyProspectColumn_(ss) {
   if (!c) return;
   var rows = Math.max(sheet.getMaxRows() - 1, 1);
   sheet.getRange(2, c, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+}
+
+/** Оценка появилась позже флажка «Перспектива»: у сделок с перспективой без оценки ставится 3. */
+function migrateScore_(ss, log) {
+  var sheet = ss.getSheetByName(SHEET.DEALS);
+  var pc = headerCol_(sheet, 'Перспектива');
+  var sc = headerCol_(sheet, 'Оценка');
+  var last = sheet.getLastRow();
+  if (!pc || !sc || last < 2) return;
+  var p = sheet.getRange(2, pc, last - 1, 1).getValues();
+  var range = sheet.getRange(2, sc, last - 1, 1);
+  var vals = range.getValues();
+  var n = 0;
+  vals = vals.map(function (r, i) {
+    if (String(r[0]).trim() === '' && toBool_(p[i][0])) { n++; return ['3']; }
+    return r;
+  });
+  if (n) {
+    range.setValues(vals);
+    log.push('оценка 3 поставлена сделкам с перспективой оплаты: ' + n + ' шт.');
+  }
 }
 
 /**

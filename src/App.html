@@ -145,7 +145,14 @@
     if (type === 'Обращение') return potok === 'Исходящее' ? 'out' : 'in';
     return TOUCH_DIR[type] || '';
   }
-  var COLOR_TITLE = { green: 'Оплачено', yellow: 'Есть перспектива оплаты', white: '' };
+  var COLOR_TITLE = { green: 'Оплачено', yellow: 'Оценка 3: активный покупатель, есть перспектива оплаты', white: '' };
+  var SCORE_LABELS = { '1': 'Не заинтересован', '2': 'Заинтересован', '3': 'Активный покупатель' };
+  function scoreTitle(k) { return k ? 'Оценка ' + k + ': ' + SCORE_LABELS[k] : ''; }
+  var SCORE_HINTS = {
+    '1': 'Вообще не заинтересован: «цена?» без «здравствуйте», ответил и пропал',
+    '2': 'Проявил интерес к сообщениям, идёт на контакт',
+    '3': 'Просит ссылку, говорит, что готов оплатить — есть перспектива оплаты'
+  };
 
   var CONTACT_NAMES = { nick: 'ник Инстаграм', dialogUrl: 'ссылка на диалог', email: 'почта', phone: 'телефон', gcId: 'ID GetCourse' };
 
@@ -296,7 +303,7 @@
     if (m) return { name: 'deal', id: m[1] };
     var t = /^task\/([\w-]+)/.exec(h);
     if (t) return { name: 'task', id: t[1] };
-    if (['board', 'report', 'guide', 'tasks', 'messages'].indexOf(h) >= 0) return { name: h, id: '' };
+    if (['board', 'report', 'guide', 'tasks', 'messages', 'import'].indexOf(h) >= 0) return { name: h, id: '' };
     return { name: 'today', id: '' };
   }
   function go(hash) {
@@ -347,6 +354,7 @@
       '      <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
       '      <span class="drow-name">{{ d.clientName || "Без имени" }}</span>' +
       '      <span class="chip" :class="\'ch-\' + d.channel">{{ chLabel(d.channel) }}</span>' +
+      '      <span v-if="d.score" class="score" :class="\'s\' + d.score" :title="scoreTitle(d.score)">{{ d.score }}</span>' +
       '      <span v-if="d.course" class="muted">{{ d.course }}</span>' +
       '      <span class="stage" :class="stageClass(d.stage)">{{ d.stage }}</span>' +
       '    </div>' +
@@ -376,7 +384,7 @@
           Date.now() - new Date(this.d.createdAt).getTime() > (Number(this.alertMin) || 10) * 60000;
       }
     },
-    methods: { fmtWhen: fmtWhen, chLabel: chLabel, stageClass: stageClass }
+    methods: { fmtWhen: fmtWhen, chLabel: chLabel, stageClass: stageClass, scoreTitle: scoreTitle }
   };
 
   /* ---------- Экран «Сегодня» ---------- */
@@ -398,7 +406,8 @@
       '  <div v-if="loading && !data" class="loading">Загружаю…</div>' +
       '  <div v-else-if="error" class="panel">{{ error }}</div>' +
       '  <template v-else-if="data">' +
-      '    <div class="month-total"><span>Итого оплачено за {{ monthName }}:</span> <b>{{ rub(data.counters.monthPaidSum) || "0 ₽" }}</b> <span class="muted">· оплат: {{ data.counters.monthPaid }}</span></div>' +
+      '    <div class="month-total"><span>Итого оплачено за {{ monthName }}:</span> <b>{{ rub(data.counters.monthPaidSum) || "0 ₽" }}</b> <span class="muted">· оплат: {{ data.counters.monthPaid }}</span>' +
+      '      <span class="muted" v-if="data.counters.monthCreated !== undefined"> · обращений за {{ monthName }}: {{ data.counters.monthCreated }}<template v-if="data.counters.monthCreated"> · конверсия {{ Math.round(data.counters.monthPaid / data.counters.monthCreated * 100) }}%</template></span></div>' +
       '    <div class="counters">' +
       '      <button type="button" class="counter clickable" @click="showList(\'created\')"><div class="num">{{ data.counters.created }}</div><div class="cap">новых обращений <span class="see">посмотреть</span></div></button>' +
       '      <button type="button" class="counter clickable" @click="showList(\'touches\')"><div class="num">{{ data.counters.touches }}</div><div class="cap">касаний <span class="see">посмотреть</span></div></button>' +
@@ -735,7 +744,8 @@
       '      <span class="stage" :class="stageClass(deal.stage)">{{ deal.stage }}</span>' +
       '      <span class="chip" :class="\'ch-\' + deal.channel">{{ deal.channel }}</span>' +
       '      <span class="faint">{{ deal.id }} · {{ deal.potok }} · создана {{ fmtDate(deal.createdAt) }}</span>' +
-      '      <button class="btn sm prospect-btn" :class="{on: deal.prospect}" :disabled="deal.stage === \'Оплачено\' || deal.stage === \'Отказ\'" @click="saveDeal(\'prospect\', !deal.prospect)" title="Жёлтый цвет: работаем плотно, есть перспектива оплаты">{{ deal.prospect ? "★ Есть перспектива" : "☆ Перспектива оплаты" }}</button>' +
+      '      <span class="score-pick" title="Оценка клиента. 3 — жёлтый цвет: есть перспектива оплаты"><span class="faint small">Оценка:</span>' +
+      '        <button v-for="k in [\'1\', \'2\', \'3\']" :key="k" class="btn sm" :class="[\'s\' + k, {on: deal.score === k}]" :title="k + \' — \' + scoreHints[k]" @click="saveDeal(\'score\', deal.score === k ? \'\' : k)">{{ k }}<span class="hide-mobile"> {{ scoreLabels[k].toLowerCase() }}</span></button></span>' +
       '      <span class="head-links"><a v-if="link" class="btn sm primary" :href="link" target="_blank" rel="noopener">Открыть диалог ↗</a>' +
       '        <a v-if="gc && gc.dialog" class="btn sm" :class="{primary: !link}" :href="gc.dialog" target="_blank" rel="noopener">Диалог GetCourse ↗</a>' +
       '        <a v-if="gc && gc.profile" class="btn sm" :href="gc.profile" target="_blank" rel="noopener">Профиль GC ↗</a></span>' +
@@ -838,6 +848,8 @@
       '  </template>' +
       '</div>',
     computed: {
+      scoreLabels: function () { return SCORE_LABELS; },
+      scoreHints: function () { return SCORE_HINTS; },
       dicts: function () { return store.boot.dicts; },
       settings: function () { return store.boot.settings; },
       link: function () {
@@ -958,6 +970,7 @@
         var self = this;
         var before = Object.assign({}, this.deal);
         var local = Object.assign({}, patch);
+        if ('score' in local) local.prospect = local.score === '3';
         if ('prospect' in local) local.color = local.prospect && this.deal.stage !== 'Отказ' ? (this.deal.stage === 'Оплачено' ? 'green' : 'yellow') : (this.deal.stage === 'Оплачено' ? 'green' : 'white');
         this.deal = Object.assign({}, this.deal, local);
         this.errField = '';
@@ -1082,7 +1095,7 @@
     emits: ['close'],
     data: function () {
       return {
-        f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '', prospect: false,
+        f: { channel: '', potok: 'Входящее', contact: '', name: '', request: '', course: '', tariff: '', score: '',
           priorContact: '', priorWhere: '', priorWhen: '', priorNote: '' },
         today: toInputDate(new Date().toISOString()),
         customCourse: false, dups: null, chosen: null, force: false, checking: false, busy: false, errField: '', lastChecked: '', similar: []
@@ -1141,13 +1154,15 @@
       '          <input v-else class="input" v-model="f.course" ref="courseInput" placeholder="Например: УСН + ОСН"></div>' +
       '        <div class="field grow"><label>Тариф</label><select class="select" v-model="f.tariff" :disabled="!tariffNames.length"><option value="">{{ f.course ? (tariffNames.length ? "— не выбран —" : "нет тарифов — сумма вручную") : "сначала выберите курс" }}</option><option v-for="t in tariffNames" :key="t" :value="t">{{ t }}</option></select></div>' +
       '      </div>' +
-      '      <button type="button" class="btn sm prospect-btn" :class="{on: f.prospect}" @click="f.prospect = !f.prospect">{{ f.prospect ? "★ Есть перспектива оплаты" : "☆ Перспектива оплаты" }}</button>' +
+      '      <span class="score-pick"><span class="faint small">Оценка:</span><button v-for="k in [\'1\', \'2\', \'3\']" :key="k" type="button" class="btn sm" :class="[\'s\' + k, {on: f.score === k}]" :title="k + \' — \' + scoreHints[k]" @click="f.score = f.score === k ? \'\' : k">{{ k }} {{ scoreLabels[k].toLowerCase() }}</button></span>' +
       '    </div>' +
       '    <div class="modal-foot"><button class="btn" @click="$emit(\'close\')">Отмена</button>' +
       '      <button class="btn primary" :disabled="busy" @click="submit">{{ busy ? "Сохраняю…" : "Сохранить" }}</button></div>' +
       '  </div>' +
       '</div>',
     computed: {
+      scoreLabels: function () { return SCORE_LABELS; },
+      scoreHints: function () { return SCORE_HINTS; },
       dicts: function () { return store.boot.dicts; },
       kind: function () { return detectContact(this.f.contact); },
       kindName: function () { return CONTACT_NAMES[this.kind] || ''; },
@@ -1216,7 +1231,7 @@
         if (!this.f.channel) { this.errField = 'channel'; toast('Выберите канал', true); return; }
         if (!this.chosen && !this.f.priorContact) { this.errField = 'priorContact'; toast('Отметьте, был ли контакт с человеком раньше', true); return; }
         var payload = {
-          deal: { channel: this.f.channel, potok: this.f.potok, request: this.f.request, course: this.f.course, tariff: this.f.tariff, prospect: this.f.prospect,
+          deal: { channel: this.f.channel, potok: this.f.potok, request: this.f.request, course: this.f.course, tariff: this.f.tariff, score: this.f.score,
             priorContact: this.chosen ? '' : this.f.priorContact, priorWhere: this.f.priorWhere, priorWhen: this.f.priorWhen, priorNote: this.f.priorNote },
           force: this.force
         };
@@ -1299,6 +1314,7 @@
       '<div class="bcard" :class="\'c-\' + (d.color || \'white\')" :data-id="d.id" @click="open">' +
       '  <div class="row"><b class="grow ellipsis">{{ d.clientName || "Без имени" }}</b>' +
       '    <span v-if="d.check || d.clientCheck" class="dot-check" title="Есть пометка «Проверить»"></span>' +
+      '    <span v-if="d.score" class="score" :class="\'s\' + d.score" :title="scoreTitle(d.score)">{{ d.score }}</span>' +
       '    <span class="chip" :class="\'ch-\' + d.channel">{{ chLabel(d.channel) }}</span></div>' +
       '  <div class="muted small" v-if="d.course || d.amount">{{ d.course }}<span v-if="d.amount"> · {{ rub(d.amount) }}</span></div>' +
       '  <div class="small" v-if="d.stage === \'Оплачено\'"><b>{{ rub(d.amount) }}</b><span class="faint" v-if="d.paidAt"> · оплата {{ fmtDate(d.paidAt, false) }}</span></div>' +
@@ -1309,7 +1325,7 @@
       late: function () { return !this.d.taskAt || new Date(this.d.taskAt).getTime() < dayStart(nowMs(), 0); }
     },
     methods: {
-      chLabel: chLabel, rub: rub, fmtWhen: fmtWhen, fmtDate: fmtDate,
+      chLabel: chLabel, rub: rub, fmtWhen: fmtWhen, fmtDate: fmtDate, scoreTitle: scoreTitle,
       open: function () { hintDeal(this.d); go('deal/' + this.d.id); }
     }
   };
@@ -1552,7 +1568,8 @@
       '        <p class="hint">«Новые» — раньше не общались. «Активные диалоги» — была хоть одна запись в истории за период, в том числе со старыми клиентами; если человек писал в двух каналах, он учтён в обоих.</p></section>' +
       '      <section class="panel"><h2>Новые обращения: входящие и исходящие</h2><bar-list :rows="toRows(r.newByPotok, dicts.potoki)"></bar-list>' +
       '        <h2 style="margin-top:16px">Был контакт до CRM</h2><bar-list :rows="toRows(r.priorContact, [\'Нет\', \'Да\', \'Не отмечено\'])"></bar-list></section>' +
-      '      <section class="panel"><h2>Обращения по каналам</h2><bar-list :rows="toRows(r.byChannel, dicts.channels)"></bar-list></section>' +
+      '      <section class="panel"><h2>Обращения по каналам</h2><bar-list :rows="toRows(r.byChannel, dicts.channels)"></bar-list>' +
+      '        <h2 style="margin-top:16px">Оценка клиентов</h2><bar-list :rows="scoreRows"></bar-list></section>' +
       '      <section class="panel"><h2>Стадии сделок периода сейчас</h2><bar-list :rows="toRows(r.funnel, dicts.stages)"></bar-list></section>' +
       '      <section class="panel"><h2>Оплаты по курсам</h2>' +
       '        <table class="tbl" v-if="courseRows.length"><thead><tr><th>Курс</th><th>Оплат</th><th>Выручка</th></tr></thead>' +
@@ -1573,6 +1590,10 @@
         [r.byChannel, r.activeByChannel, r.newByChannel].forEach(function (o) { Object.keys(o || {}).forEach(function (k) { if (chs.indexOf(k) < 0) chs.push(k); }); });
         return chs.map(function (ch) { return { ch: ch, n: r.newByChannel[ch] || 0, l: r.byChannel[ch] || 0, a: r.activeByChannel[ch] || 0 }; })
           .filter(function (x) { return x.n || x.l || x.a; });
+      },
+      scoreRows: function () {
+        var b = this.r.byScore || {};
+        return ['3', '2', '1', '—'].map(function (k) { return { label: k === '—' ? 'Без оценки' : k + ' — ' + SCORE_LABELS[k], value: b[k] || 0 }; });
       },
       courseRows: function () {
         var bc = this.r.byCourse || {};
@@ -1640,11 +1661,272 @@
     sLost: { a: true, title: 'Отказ', steps: ['Кнопка «Отказ» и причина. Не отвечает после нескольких напоминаний — «Не отвечает».', 'Ошибочную сделку не удаляем: «Отказ» с причиной «Другое».'] }
   };
 
+  /* ---------- Перенос из старой таблицы менеджера ---------- */
+
+  /* LEGACY-PARSER-START */
+  /**
+   * Разбирает книгу Excel из старой Google Таблицы Максима.
+   * deals — строки листа «Обращения» (колонки по порядку: №, ФИ со ссылкой, канал, дата, запрос,
+   * дата 2 контакта, план, оценка, оплатил, заказ, сумма, дата оплаты) с цветом «Плана».
+   * tasks — листы-рассылки, где есть колонка «Написал(и)»: люди, отметки и варианты текста.
+   */
+  function parseLegacyWorkbook(XLSX, wb) {
+    var out = { dealsSheet: '', deals: [], tasks: [] };
+    var pad = function (n) { n = String(n); return n.length < 2 ? '0' + n : n; };
+    var at = function (ws, r, c) { return ws[XLSX.utils.encode_cell({ r: r, c: c })]; };
+    var text = function (cell) { return cell && cell.v !== undefined && cell.v !== null ? String(cell.v).trim() : ''; };
+    var day = function (cell) {
+      if (!cell || cell.v === undefined || cell.v === '') return '';
+      if (cell.t === 'n') return new Date(Math.round((cell.v - 25569) * 86400000)).toISOString().slice(0, 10);
+      if (cell.v instanceof Date) return cell.v.toISOString().slice(0, 10);
+      var s = String(cell.v).trim();
+      var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec(s);
+      if (m) return m[3] + '-' + pad(m[2]) + '-' + pad(m[1]);
+      m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+      return m ? m[0] : '';
+    };
+    var fill = function (cell) {
+      return cell && cell.s && cell.s.patternType === 'solid' && cell.s.fgColor ? String(cell.s.fgColor.rgb || '') : '';
+    };
+    var link = function (cell) { return cell && cell.l && cell.l.Target ? String(cell.l.Target) : ''; };
+
+    wb.SheetNames.forEach(function (name) {
+      var ws = wb.Sheets[name];
+      if (!ws || !ws['!ref']) return;
+      var range = XLSX.utils.decode_range(ws['!ref']);
+      if (/обращ|нов\.?\s*обр/i.test(name) && !out.dealsSheet) {
+        out.dealsSheet = name.trim();
+        for (var r = range.s.r; r <= range.e.r; r++) {
+          var a = at(ws, r, 0);
+          var b = at(ws, r, 1);
+          if (!a || a.t !== 'n' || !text(b)) continue;
+          out.deals.push({
+            row: r + 1, no: a.v, name: text(b), link: link(b), channel: text(at(ws, r, 2)), date: day(at(ws, r, 3)),
+            request: text(at(ws, r, 4)), second: day(at(ws, r, 5)), plan: text(at(ws, r, 6)), planColor: fill(at(ws, r, 6)),
+            rowColor: fill(a), score: text(at(ws, r, 7)), paid: text(at(ws, r, 8)), orderNo: text(at(ws, r, 9)),
+            orderLink: link(at(ws, r, 9)), amount: text(at(ws, r, 10)), payDate: day(at(ws, r, 11))
+          });
+        }
+        return;
+      }
+      // Лист-рассылка: ищем строку заголовков с «Написал».
+      var head = -1;
+      for (var hr = range.s.r; hr <= Math.min(range.e.r, range.s.r + 20) && head < 0; hr++) {
+        for (var hc = range.s.c; hc <= Math.min(range.e.c, 30); hc++) {
+          if (/^написал/i.test(text(at(ws, hr, hc)))) { head = hr; break; }
+        }
+      }
+      if (head < 0) return;
+      var cols = {};
+      var notes = [];
+      var names = {
+        name: ['пользователь', 'фи', 'имя и фамилия'], first: ['имя'], lastName: ['фамилия'], gcId: ['id', 'id пользователя', 'id getcourse'],
+        email: ['email', 'e-mail', 'почта'], phone: ['телефон'], sent: ['написал', 'написали'], replied: ['есть ответ', 'ответ', 'ответил'],
+        sentAt: ['когда написал', 'дата 1 сообщения', 'дата', 'дата сообщения'], variant: ['вариант текста', 'вариант', 'шаблон'],
+        channel: ['средство взязи', 'средство связи', 'канал'], second: ['дата 2 сообщения']
+      };
+      for (var c = range.s.c; c <= range.e.c; c++) {
+        var h = text(at(ws, head, c)).toLowerCase().replace(/\s+/g, ' ');
+        if (!h) continue;
+        var hit = false;
+        Object.keys(names).forEach(function (f) { if (!hit && names[f].indexOf(h) >= 0 && cols[f] === undefined) { cols[f] = c; hit = true; } });
+        if (!hit && /доп|ссылк|коммент|столбец|примеч/.test(h)) notes.push({ c: c, h: text(at(ws, head, c)) });
+      }
+      if (cols.name === undefined && cols.first !== undefined) { cols.name = cols.first; delete cols.first; }
+      if (cols.name === undefined) return;
+      // Варианты текста: «1 сообщение» и текст под ним.
+      var templates = [];
+      for (var tr = range.s.r; tr < head; tr++) {
+        for (var tc = range.s.c; tc <= range.e.c; tc++) {
+          var tm = /^(\d+)\s*сообщение/i.exec(text(at(ws, tr, tc)));
+          if (tm && text(at(ws, tr + 1, tc))) templates.push({ n: tm[1], text: text(at(ws, tr + 1, tc)) });
+        }
+      }
+      var people = [];
+      for (var pr = head + 1; pr <= range.e.r; pr++) {
+        var full = text(at(ws, pr, cols.name)).replace(/\s+/g, ' ');
+        if (!full) continue;
+        var last = cols.lastName !== undefined ? text(at(ws, pr, cols.lastName)) : '';
+        var first = full;
+        if (last) {
+          if (full !== last && full.slice(-last.length) === last) first = full.slice(0, -last.length).trim();
+        } else {
+          var parts = full.split(' ');
+          first = parts[0];
+          last = parts.slice(1).join(' ');
+        }
+        var note = notes.map(function (n) {
+          var v = text(at(ws, pr, n.c));
+          return v && v !== '-' ? (/^столбец/i.test(n.h) ? v : n.h.trim() + ': ' + v) : '';
+        }).filter(Boolean);
+        if (cols.second !== undefined && day(at(ws, pr, cols.second))) note.push('второе сообщение ' + day(at(ws, pr, cols.second)));
+        var g = function (f) { return cols[f] === undefined ? '' : text(at(ws, pr, cols[f])); };
+        people.push({
+          firstName: first, lastName: last, email: g('email'), phone: g('phone'), gcId: /^\d+$/.test(g('gcId')) ? g('gcId') : '',
+          sent: g('sent'), replied: g('replied'), sentAt: cols.sentAt === undefined ? '' : day(at(ws, pr, cols.sentAt)),
+          variant: g('variant'), channel: g('channel'), note: note.join('; ')
+        });
+      }
+      if (people.length) out.tasks.push({ sheet: name.trim(), templates: templates, people: people });
+    });
+    return out;
+  }
+  /* LEGACY-PARSER-END */
+
+  var LegacyImportView = {
+    data: function () {
+      return {
+        fileName: '', error: '', parsed: null, reading: false,
+        items: null, pick: {}, dealsBusy: false, dealsDone: null,
+        tasks: [], taskList: null
+      };
+    },
+    template:
+      '<div>' +
+      '  <div class="page-head"><h1>Перенос из старой таблицы</h1><span class="muted">таблица Максима → CRM, без дублей</span></div>' +
+      '  <div class="panel">' +
+      '    <p>В Google Таблице Максима: <b>Файл → Скачать → Microsoft Excel (.xlsx)</b>. Потом выберите файл здесь.</p>' +
+      '    <p class="small muted">Сначала CRM покажет, что изменится, и только после кнопки «Перенести» запишет. Повторный перенос того же файла ничего не задвоит: сделки ищутся по номеру строки и по контактам, люди в заданиях — по ID GetCourse, почте и телефону.</p>' +
+      '    <input type="file" accept=".xlsx" @change="onFile"> <span class="muted small" v-if="reading">читаю…</span>' +
+      '    <div v-if="error" class="hint err">{{ error }}</div>' +
+      '  </div>' +
+
+      '  <template v-if="parsed">' +
+      '    <section class="panel" v-if="parsed.deals.length">' +
+      '      <h2>Лист «{{ parsed.dealsSheet }}» — обращения <span class="faint" style="font-weight:400">{{ parsed.deals.length }} строк</span></h2>' +
+      '      <div v-if="!items" class="loading">Сравниваю с CRM…</div>' +
+      '      <template v-else>' +
+      '        <div class="row wrap small" style="gap:12px;margin-bottom:8px"><span v-for="k in kindOrder" :key="k" v-show="count(k)"><span class="kind" :class="\'k-\' + k">{{ kindLabel[k] }}</span> {{ count(k) }}</span></div>' +
+      '        <div class="tbl-wrap"><table class="tbl legacy-tbl"><thead><tr><th></th><th>Строка</th><th>Клиент</th><th>Что будет</th></tr></thead><tbody>' +
+      '          <tr v-for="it in items" :key="it.row" :class="{dim: !pick[it.row]}">' +
+      '            <td><input type="checkbox" v-model="pick[it.row]" :disabled="it.kind === \'same\' || it.kind === \'skip\'"></td>' +
+      '            <td class="faint">{{ it.row }}</td>' +
+      '            <td><b>{{ it.name }}</b><div v-if="it.dealId"><a href="#" class="small" @click.prevent="openDeal(it.dealId)">{{ it.dealId }}</a></div></td>' +
+      '            <td><span class="kind" :class="\'k-\' + it.kind">{{ kindLabel[it.kind] }}</span>' +
+      '              <div class="small" v-for="(c, i) in it.changes" :key="i">{{ c }}</div><div class="small warn-text" v-if="it.warn">{{ it.warn }}</div></td>' +
+      '          </tr></tbody></table></div>' +
+      '        <div class="row" style="margin-top:10px"><button class="btn primary" :disabled="dealsBusy || !picked.length" @click="applyDeals">{{ dealsBusy ? "Переношу…" : "Перенести отмеченные (" + picked.length + ")" }}</button>' +
+      '          <span v-if="dealsDone" class="small">Готово: новых {{ dealsDone.created }}, дополнено {{ dealsDone.updated }}<span v-if="dealsDone.failed.length" class="warn-text"> · не вышло: {{ dealsDone.failed.join("; ") }}</span></span></div>' +
+      '      </template>' +
+      '    </section>' +
+
+      '    <section class="panel" v-for="(t, i) in tasks" :key="t.sheet">' +
+      '      <h2>Лист «{{ t.sheet }}» — рассылка <span class="faint" style="font-weight:400">{{ t.people.length }} чел.<span v-if="t.templates.length"> · вариантов текста: {{ t.templates.length }}</span></span></h2>' +
+      '      <div class="row wrap" style="gap:8px;align-items:flex-end">' +
+      '        <div class="field"><label>В задание</label><select class="input" v-model="t.taskId" @change="previewTask(t)"><option value="">новое: «{{ t.name }}»</option><option v-for="x in taskList || []" :key="x.id" :value="x.id">{{ x.name }}</option></select></div>' +
+      '        <div class="field" v-if="!t.taskId"><label>Название</label><input class="input" v-model="t.name" @change="previewTask(t)"></div>' +
+      '        <div class="field"><label>Сегмент</label><input class="input" v-model="t.segment" @change="previewTask(t)"></div>' +
+      '      </div>' +
+      '      <div v-if="t.busy && !t.preview" class="loading">Считаю…</div>' +
+      '      <div v-if="t.error" class="hint err">{{ t.error }}</div>' +
+      '      <div v-if="t.preview" class="small" style="margin:6px 0">' +
+      '        <div v-if="t.preview.applied"><b>Готово.</b> <a href="#" @click.prevent="openTask(t.preview.taskId)">Открыть задание</a></div>' +
+      '        <div>{{ t.preview.isNew ? "Будет создано задание" : "Задание уже есть" }} «{{ t.preview.taskName }}». Новых людей: <b>{{ t.preview.add }}</b>, обновится статус: <b>{{ t.preview.update }}</b>, без изменений: {{ t.preview.same }}<span v-if="t.preview.skipped">, пропущено (повторы, без имени): {{ t.preview.skipped }}</span>.</div>' +
+      '        <div v-if="t.preview.templates">Варианты текста → шаблоны задания: новых {{ t.preview.templatesNew }} из {{ t.preview.templates }}.</div>' +
+      '        <div class="muted">По таблице: <span v-for="(n, s) in t.preview.byStatus" :key="s">{{ s }} — {{ n }}; </span></div>' +
+      '      </div>' +
+      '      <button class="btn primary" :disabled="t.busy || !t.preview || t.preview.applied" @click="applyTask(t)">{{ t.busy && t.preview ? "Загружаю…" : "Перенести в задание" }}</button>' +
+      '    </section>' +
+      '    <div v-if="!parsed.deals.length && !tasks.length" class="panel">В файле не нашлось листа «Обращения» и листов с колонкой «Написал». Это точно таблица Максима?</div>' +
+      '  </template>' +
+      '</div>',
+    computed: {
+      kindOrder: function () { return ['new', 'update', 'maybe', 'same', 'skip']; },
+      kindLabel: function () { return { 'new': 'новая', update: 'дополнить', maybe: 'возможно, дубль', same: 'уже в CRM', skip: 'пропуск' }; },
+      picked: function () { var p = this.pick; return Object.keys(p).filter(function (k) { return p[k]; }).map(Number); }
+    },
+    methods: {
+      count: function (k) { return (this.items || []).filter(function (x) { return x.kind === k; }).length; },
+      openDeal: function (id) { window.open(dealHref(id), '_blank'); },
+      openTask: function (id) { go('task/' + id); },
+      onFile: function (e) {
+        var self = this;
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+        self.fileName = file.name;
+        self.error = '';
+        self.parsed = null;
+        self.items = null;
+        self.dealsDone = null;
+        self.reading = true;
+        loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js').then(function () {
+          var reader = new FileReader();
+          reader.onload = function () {
+            self.reading = false;
+            try {
+              var wb = window.XLSX.read(new Uint8Array(reader.result), { type: 'array', cellStyles: true });
+              self.setParsed(parseLegacyWorkbook(window.XLSX, wb));
+            } catch (err) { self.error = 'Не удалось прочитать файл: ' + err.message; }
+          };
+          reader.readAsArrayBuffer(file);
+        }, function () { self.reading = false; self.error = 'Не загрузилась программа чтения Excel. Проверьте интернет и попробуйте ещё раз.'; });
+      },
+      setParsed: function (p) {
+        var self = this;
+        self.parsed = p;
+        self.tasks = p.tasks.map(function (t) {
+          return Object.assign({}, t, { taskId: '', name: t.sheet, segment: 'Все', preview: null, busy: false, error: '' });
+        });
+        if (p.deals.length) self.previewDeals();
+        call('listTasks').then(function (list) {
+          self.taskList = list;
+          // Задание с таким же названием уже есть — предлагаем его.
+          self.tasks.forEach(function (t) {
+            var same = list.filter(function (x) { return String(x.name).trim().toLowerCase() === t.sheet.toLowerCase(); })[0];
+            if (same) t.taskId = same.id;
+          });
+          self.tasks.forEach(function (t) { self.previewTask(t); });
+        }, function () { self.taskList = []; self.tasks.forEach(function (t) { self.previewTask(t); }); });
+      },
+      previewDeals: function () {
+        var self = this;
+        call('previewLegacyDeals', self.parsed.deals, self.parsed.dealsSheet).then(function (res) {
+          self.items = res.items;
+          var pick = {};
+          res.items.forEach(function (it) { pick[it.row] = !!it.checked; });
+          self.pick = pick;
+        }, function (err) { self.error = err.error; });
+      },
+      applyDeals: function () {
+        var self = this;
+        self.dealsBusy = true;
+        call('applyLegacyDeals', self.parsed.deals, self.parsed.dealsSheet, self.picked).then(function (res) {
+          self.dealsBusy = false;
+          self.dealsDone = res;
+          store.todayData = null;
+          store.boardData = null;
+          store.dealCache = {};
+          self.previewDeals();
+        }, function (err) { self.dealsBusy = false; self.error = err.error; });
+      },
+      taskInput: function (t) {
+        return { taskId: t.taskId, name: t.name, segment: t.segment, templates: t.templates, people: t.people };
+      },
+      previewTask: function (t) {
+        t.busy = true;
+        t.error = '';
+        t.preview = null;
+        call('importLegacyTask', this.taskInput(t), false).then(function (res) { t.busy = false; t.preview = res; },
+          function (err) { t.busy = false; t.error = err.error; });
+      },
+      applyTask: function (t) {
+        t.busy = true;
+        call('importLegacyTask', this.taskInput(t), true).then(function (res) {
+          t.busy = false;
+          t.preview = res;
+          t.taskId = res.taskId;
+          store.tasksData = null;
+        }, function (err) { t.busy = false; t.error = err.error; });
+      }
+    }
+  };
+
   var GuideView = {
     data: function () { return { path: ['start'] }; },
     template:
       '<div class="guide">' +
-      '  <div class="page-head"><h1>Как работать</h1><span class="muted">порядок дня и что делать с каждым сообщением</span></div>' +
+      '  <div class="page-head"><h1>Как работать</h1><span class="muted">порядок дня и что делать с каждым сообщением</span>' +
+      '    <a class="btn ghost sm" style="margin-left:auto" href="#import" @click.prevent="go(\'import\')">Перенос из старой таблицы</a></div>' +
       '  <section class="panel"><h2>Распорядок дня</h2>' +
       '    <ol class="timeline">' +
       '      <li v-for="(s, i) in day" :key="i"><div class="tl-time">{{ s.time }}</div><div class="tl-body"><b>{{ s.title }}</b><div class="muted">{{ s.text }}</div></div></li>' +
@@ -1685,6 +1967,7 @@
       }
     },
     methods: {
+      go: go,
       node: function (id) { return GUIDE_TREE[id]; },
       pick: function (i, next) { this.path = this.path.slice(0, i + 1).concat([next]); }
     }
@@ -1751,7 +2034,8 @@
     template:
       '<div>' +
       '  <div class="page-head"><h1>Задания</h1><span class="muted">рассылки по спискам: кому написать, каким шаблоном, кто ответил</span>' +
-      '    <button class="btn primary sm" style="margin-left:auto" @click="modal = {}">+ Задание</button></div>' +
+      '    <a class="btn ghost sm" style="margin-left:auto" href="#import" @click.prevent="go(\'import\')">Перенести из таблицы</a>' +
+      '    <button class="btn primary sm" @click="modal = {}">+ Задание</button></div>' +
       '  <div v-if="loading && !tasks.length" class="loading">Загружаю…</div>' +
       '  <div v-else-if="error" class="panel">{{ error }}</div>' +
       '  <div v-else-if="!tasks.length" class="panel empty-state"><p><b>Заданий пока нет.</b></p><p class="muted">Например: «Отработка БК, октябрь» с подзаданиями «Были на эфирах» (5–11 октября) и «Смотрели записи» (12–18 октября).</p>' +
@@ -1783,7 +2067,7 @@
     },
     created: function () { this.load(); },
     methods: {
-      periodOf: periodOf,
+      periodOf: periodOf, go: go,
       dates: function (t) { return (t.start ? fmtDate(t.start, false) : '…') + ' — ' + (t.end ? fmtDate(t.end, false) : '…'); },
       open: function (t) { go('task/' + t.id); },
       load: function () {
@@ -2331,7 +2615,8 @@
   /* ---------- Корень ---------- */
   var Root = {
     components: { TodayView: TodayView, DealView: DealView, NewLeadModal: NewLeadModal, SearchBox: SearchBox,
-      BoardView: BoardView, ReportView: ReportView, GuideView: GuideView, TasksView: TasksView, TaskView: TaskView, MessagesView: MessagesView },
+      BoardView: BoardView, ReportView: ReportView, GuideView: GuideView, TasksView: TasksView, TaskView: TaskView, MessagesView: MessagesView,
+      LegacyImportView: LegacyImportView },
     template:
       '<div v-if="!store.boot" class="loading">{{ store.bootError || "Загрузка…" }}</div>' +
       '<template v-else>' +
@@ -2355,6 +2640,7 @@
       '    <guide-view v-else-if="store.route.name === \'guide\'"></guide-view>' +
       '    <tasks-view v-else-if="store.route.name === \'tasks\'"></tasks-view>' +
       '    <messages-view v-else-if="store.route.name === \'messages\'"></messages-view>' +
+      '    <legacy-import-view v-else-if="store.route.name === \'import\'"></legacy-import-view>' +
       '    <task-view v-else-if="store.route.name === \'task\'" :id="store.route.id"></task-view>' +
       '  </main>' +
       '  <nav class="bottom-nav">' +

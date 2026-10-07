@@ -59,7 +59,8 @@ SCHEMA[SHEET.DEALS] = {
   priorContact: 'Был контакт',
   priorWhere: 'Где был контакт',
   priorWhen: 'Когда был контакт',
-  priorNote: 'Комментарий о контакте'
+  priorNote: 'Комментарий о контакте',
+  score: 'Оценка'
 };
 SCHEMA[SHEET.TOUCHES] = {
   dealId: 'ID сделки',
@@ -144,7 +145,7 @@ SCHEMA[SHEET.PEOPLE] = {
  */
 var OPTIONAL_COLUMNS = {
   prospect: true, otherLinks: true, channel: true, taskId: true, segment: true,
-  priorContact: true, priorWhere: true, priorWhen: true, priorNote: true
+  priorContact: true, priorWhere: true, priorWhen: true, priorNote: true, score: true
 };
 
 /** Поля, в которых лежат даты (в таблице — настоящие Date, клиенту — ISO-строки). */

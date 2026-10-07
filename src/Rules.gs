@@ -230,8 +230,40 @@ function initialStage_(potok) {
 }
 
 /**
- * Цвет строки (запрос руководителя): зелёный — оплачено, жёлтый — есть перспектива оплаты,
- * белый — пока без перспектив. Закрытые «Отказ» всегда белые.
+ * Оценка клиента (критерии квалификации Максима):
+ * 1 — не заинтересован, 2 — заинтересован, 3 — активный покупатель (просит ссылку, готов оплатить).
+ * Оценка 3 = «Перспектива оплаты»: строка жёлтая.
+ */
+var SCORE_LABELS = { '1': 'Не заинтересован', '2': 'Заинтересован', '3': 'Активный покупатель' };
+
+function normScore_(v) {
+  var m = /^\s*([123])(\.0+)?\b/.exec(String(v === null || v === undefined ? '' : v));
+  return m ? m[1] : '';
+}
+
+/**
+ * Оценка и флажок «Перспектива» держатся вместе: оценка 3 ⇔ перспектива.
+ * Если поменяли оценку — по ней ставится флажок; если поменяли только флажок (старые версии сайта) — оценка.
+ */
+function syncScore_(deal, prev) {
+  deal.score = normScore_(deal.score);
+  deal.prospect = toBool_(deal.prospect);
+  var prevScore = prev ? normScore_(prev.score) : '';
+  var prevProspect = prev ? toBool_(prev.prospect) : false;
+  if (!prev) {
+    if (deal.score) deal.prospect = deal.score === '3';
+    else if (deal.prospect) deal.score = '3';
+  } else if (deal.score !== prevScore) {
+    deal.prospect = deal.score === '3';
+  } else if (deal.prospect !== prevProspect) {
+    if (deal.prospect) deal.score = '3';
+    else if (deal.score === '3') deal.score = '2';
+  }
+}
+
+/**
+ * Цвет строки (запрос руководителя): зелёный — оплачено, жёлтый — есть перспектива оплаты
+ * (оценка 3), белый — остальное. Закрытые «Отказ» всегда белые.
  */
 function dealColor_(deal) {
   if (deal.stage === STAGE.PAID) return 'green';
@@ -272,7 +304,7 @@ function applyDealRules_(deal, prev, ctx) {
   checkDict_(deal, prev, 'channel', dicts.channels, 'канал');
   checkDict_(deal, prev, 'payMethod', dicts.payMethods, 'способ оплаты');
   checkDict_(deal, prev, 'lostReason', dicts.lostReasons, 'причину отказа');
-  deal.prospect = toBool_(deal.prospect);
+  syncScore_(deal, prev);
 
   if (!prev || (prev.createdAt !== deal.createdAt)) {
     if (isDate_(deal.createdAt) && deal.createdAt.getTime() > now.getTime() + 5 * 60000) {
