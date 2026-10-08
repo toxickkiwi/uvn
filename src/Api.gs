@@ -18,7 +18,7 @@ function getStart() {
 function bootstrapData_(user) {
     var ref = getRef_();
     return {
-      user: { email: user.email, name: user.name, role: user.role },
+      user: { email: user.email, name: user.name, role: user.role, readOnly: isReadOnly_(user) },
       dicts: ref.dicts,
       tariffs: ref.tariffs.filter(function (t) { return t.active; }),
       // Курсы — из всех строк «Тарифы»: курс остаётся в списке, даже если все его тарифы выключены.

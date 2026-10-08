@@ -276,6 +276,16 @@
   .dup-deal { color: inherit; }
   .dup-pick { color: #2563eb; cursor: pointer; }
   .dup-pick.main-mark { color: #1f7a3a; cursor: default; }
+  /* Наблюдатель (только просмотр): прячем и блокируем всё, что меняет данные. */
+  .ro-badge { font-size: 12px; font-weight: 600; color: #6b4fa0; background: #f1ecfa; border-radius: 10px; padding: 2px 8px; white-space: nowrap; }
+  .read-only .w, .read-only .drow-actions button, .read-only .touch-form, .read-only .tpl-quick,
+  .read-only .tpl-preview .btn, .read-only .person-panel button:not(.ghost), .read-only .person-panel .field,
+  .read-only .person-panel .seg, .read-only .dup-group .btn, .read-only .dup-pick, .read-only .msg-card .btn.ghost { display: none !important; }
+  .read-only .person-panel .contacts button { display: inline-flex !important; }
+  .read-only .inline-val.placeholder { visibility: hidden; }
+  .read-only .zone-deal .input, .read-only .zone-deal .select, .read-only .zone-deal .btn, .read-only .zone-deal .textarea,
+  .read-only .zone-client .inline-val, .read-only .score-pick, .read-only .prior-box, .read-only .legacy-tbl input { pointer-events: none; }
+  .read-only .zone-deal .input, .read-only .zone-deal .select { background: #f7f8fa; }
   .legacy-tbl th, .legacy-tbl td { vertical-align: top; text-align: left; }
   .legacy-tbl tr.dim td { opacity: .5; }
   .kind { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 9px; background: #eef1f4; color: var(--muted, #667); margin-bottom: 2px; }

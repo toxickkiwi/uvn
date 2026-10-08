@@ -405,7 +405,7 @@
     template:
       '<div>' +
       '  <div class="page-head"><h1>Сегодня</h1><span class="muted">{{ todayLabel }}</span>' +
-      '    <a class="btn sm" :class="{warn: cleanDue}" style="margin-left:auto" href="#clean" @click.prevent="go(\'clean\')" :title="cleanDue ? \'Дубли не проверяли больше недели\' : \'Найти дубли клиентов\'">🧹 Почистить<span v-if="cleanDue"> — пора</span></a>' +
+      '    <a class="btn sm w" :class="{warn: cleanDue}" style="margin-left:auto" href="#clean" @click.prevent="go(\'clean\')" :title="cleanDue ? \'Дубли не проверяли больше недели\' : \'Найти дубли клиентов\'">🧹 Почистить<span v-if="cleanDue"> — пора</span></a>' +
       '    <button class="btn ghost sm" @click="load" :disabled="loading">Обновить</button></div>' +
       '  <div v-if="loading && !data" class="loading">Загружаю…</div>' +
       '  <div v-else-if="error" class="panel">{{ error }}</div>' +
@@ -782,8 +782,8 @@
       '        <a v-if="gc && gc.profile" class="btn sm" :class="{primary: !link && !gc.dialog}" :href="gc.profile" target="_blank" rel="noopener" title="Профиль в GetCourse — там вся переписка">GetCourse ↗</a>' +
       '        <a v-if="deal.orderUrl" class="btn sm" :class="{primary: !link && !gc}" :href="deal.orderUrl" target="_blank" rel="noopener" title="Заказ в GetCourse — из него видно покупателя">Заказ GC ↗</a></span>' +
       '    </div>' +
-      '    <div v-if="client && client.check" class="banner"><b>Клиент:</b><span class="grow">{{ client.check }}</span><button class="btn sm" @click="checked(\'client\')">Проверено</button></div>' +
-      '    <div v-if="deal.check" class="banner"><b>Сделка:</b><span class="grow">{{ deal.check }}</span><button class="btn sm" @click="checked(\'deal\')">Проверено</button></div>' +
+      '    <div v-if="client && client.check" class="banner"><b>Клиент:</b><span class="grow">{{ client.check }}</span><button class="btn sm w" @click="checked(\'client\')">Проверено</button></div>' +
+      '    <div v-if="deal.check" class="banner"><b>Сделка:</b><span class="grow">{{ deal.check }}</span><button class="btn sm w" @click="checked(\'deal\')">Проверено</button></div>' +
       '    <div class="deal-grid">' +
 
       /* ---- Клиент ---- */
@@ -1480,6 +1480,7 @@
         this._sortEls = els;
         this._sortables = els.map(function (el) {
           return window.Sortable.create(el, {
+            disabled: !!store.boot.user.readOnly,
             group: 'deals', animation: 120, draggable: '.bcard', ghostClass: 'bcard-ghost', delay: 120, delayOnTouchOnly: true,
             onStart: function (evt) { self._dragNext = evt.item.nextSibling; },
             onEnd: function (evt) {
@@ -2202,7 +2203,7 @@
     template:
       '<div class="guide">' +
       '  <div class="page-head"><h1>Как работать</h1><span class="muted">порядок дня и что делать с каждым сообщением</span>' +
-      '    <a class="btn ghost sm" style="margin-left:auto" href="#import" @click.prevent="go(\'import\')">Перенос из старой таблицы</a></div>' +
+      '    <a class="btn ghost sm w" style="margin-left:auto" href="#import" @click.prevent="go(\'import\')">Перенос из старой таблицы</a></div>' +
       '  <section class="panel"><h2>Распорядок дня</h2>' +
       '    <ol class="timeline">' +
       '      <li v-for="(s, i) in day" :key="i"><div class="tl-time">{{ s.time }}</div><div class="tl-body"><b>{{ s.title }}</b><div class="muted">{{ s.text }}</div></div></li>' +
@@ -2310,12 +2311,12 @@
     template:
       '<div>' +
       '  <div class="page-head"><h1>Задания</h1><span class="muted">рассылки по спискам: кому написать, каким шаблоном, кто ответил</span>' +
-      '    <a class="btn ghost sm" style="margin-left:auto" href="#import" @click.prevent="go(\'import\')">Перенести из таблицы</a>' +
-      '    <button class="btn primary sm" @click="modal = {}">+ Задание</button></div>' +
+      '    <a class="btn ghost sm w" style="margin-left:auto" href="#import" @click.prevent="go(\'import\')">Перенести из таблицы</a>' +
+      '    <button class="btn primary sm w" @click="modal = {}">+ Задание</button></div>' +
       '  <div v-if="loading && !tasks.length" class="loading">Загружаю…</div>' +
       '  <div v-else-if="error" class="panel">{{ error }}</div>' +
       '  <div v-else-if="!tasks.length" class="panel empty-state"><p><b>Заданий пока нет.</b></p><p class="muted">Например: «Отработка БК, октябрь» с подзаданиями «Были на эфирах» (5–11 октября) и «Смотрели записи» (12–18 октября).</p>' +
-      '    <button class="btn primary" @click="modal = {}">Создать первое задание</button></div>' +
+      '    <button class="btn primary w" @click="modal = {}">Создать первое задание</button></div>' +
       '  <template v-else>' +
       '    <div v-for="g in groups" :key="g.parent.id" class="task-group" :class="\'tg-\' + periodOf(g.parent).k">' +
       '      <div class="task-card main" @click="open(g.parent)">' +
@@ -2615,7 +2616,7 @@
     template:
       '<div>' +
       '  <div class="row" style="margin-bottom:10px"><span class="muted grow">В тексте можно писать {Имя} и {Менеджер} — подставятся сами.</span>' +
-      '    <button class="btn primary sm" @click="edit({})">+ Шаблон</button></div>' +
+      '    <button class="btn primary sm w" @click="edit({})">+ Шаблон</button></div>' +
       '  <div v-if="form" class="panel tpl-form">' +
       '    <div class="row" style="align-items:flex-start"><div class="field grow"><label>Название</label><input class="input" :class="{\'has-error\': errField===\'title\'}" v-model="form.title" placeholder="Например: Вариант 1 — про вовлечённость"></div>' +
       '      <div class="field grow"><label>Для сегмента</label><select class="select" v-model="form.segment"><option value="">для всех</option><option v-for="s in task.segments" :key="s" :value="s">{{ s }}</option></select></div></div>' +
@@ -2627,7 +2628,7 @@
       '  <div v-for="t in templates" :key="t.id" class="panel tpl-item-card">' +
       '    <div class="row wrap"><b class="grow">{{ t.title }}</b><span class="chip">{{ t.segment || "для всех" }}</span>' +
       '      <span class="small muted" v-if="st(t)">отправлено {{ st(t).sent }} · ответили {{ st(t).answered }} ({{ pct(st(t).answered, st(t).sent) }})</span>' +
-      '      <button class="btn ghost sm" @click="edit(t)">изменить</button></div>' +
+      '      <button class="btn ghost sm w" @click="edit(t)">изменить</button></div>' +
       '    <div class="pre small" style="margin-top:6px">{{ t.text }}</div>' +
       '  </div>' +
       '</div>',
@@ -2664,7 +2665,7 @@
       '      <button class="btn ghost sm" @click="back">← Задания</button>' +
       '      <h1>{{ data.task.name }}</h1><span class="period" :class="\'p-\' + period.k">{{ period.t }}</span>' +
       '      <span class="faint">{{ data.task.id }} · {{ dates }}</span>' +
-      '      <button class="btn ghost sm" @click="editOpen = true">изменить</button>' +
+      '      <button class="btn ghost sm w" @click="editOpen = true">изменить</button>' +
       '    </div>' +
       '    <div class="muted" v-if="data.task.description" style="margin:-4px 0 10px">{{ data.task.description }}</div>' +
       '    <task-progress :s="data.stats"></task-progress>' +
@@ -2676,10 +2677,10 @@
       '        <button v-for="s in data.task.segments" :key="s" class="btn sm" :class="{on: fSeg === s}" @click="fSeg = s">{{ s }} <span class="badge">{{ countSeg(s) }}</span></button>' +
       '        <select class="select compact" v-model="fStatus"><option value="">все статусы</option><option v-for="s in data.statuses" :key="s">{{ s }}</option></select>' +
       '        <input class="input compact" v-model="q" placeholder="имя, телефон, почта">' +
-      '        <button class="btn primary sm" style="margin-left:auto" @click="importOpen = true">Загрузить список</button>' +
+      '        <button class="btn primary sm w" style="margin-left:auto" @click="importOpen = true">Загрузить список</button>' +
       '      </div>' +
       '      <div v-if="!data.people.length" class="panel empty-state"><p><b>В задании пока нет людей.</b></p><p class="muted">Выгрузите список из GetCourse (Пользователи → фильтр → Экспорт) и загрузите файл.</p>' +
-      '        <button class="btn primary" @click="importOpen = true">Загрузить список</button></div>' +
+      '        <button class="btn primary w" @click="importOpen = true">Загрузить список</button></div>' +
       '      <div v-else class="task-work" :class="{\'has-panel\': current}">' +
       '        <div class="list people-list">' +
       '          <div v-if="!filtered.length" class="empty">Никого не найдено</div>' +
@@ -2823,8 +2824,8 @@
     template:
       '<div>' +
       '  <div class="page-head"><h1>Сообщения</h1><span class="muted">шаблоны по категориям — правьте прямо здесь</span>' +
-      '    <button class="btn sm" style="margin-left:auto" @click="checkGreetings">Имя клиента в приветствия</button>' +
-      '    <button class="btn primary sm" @click="edit({})">+ Сообщение</button></div>' +
+      '    <button class="btn sm w" style="margin-left:auto" @click="checkGreetings">Имя клиента в приветствия</button>' +
+      '    <button class="btn primary sm w" @click="edit({})">+ Сообщение</button></div>' +
       '  <div class="filters">' +
       '    <input class="input compact grow" style="min-width:220px;flex-basis:100%" v-model="q" placeholder="Поиск по тексту и названию">' +
       '    <button class="btn sm" :class="{on: !cat}" @click="cat = \'\'">все <span class="badge">{{ visible.length }}</span></button>' +
@@ -2846,7 +2847,7 @@
       '      <div class="msg-grid"><div v-for="t in g.items" :key="t.id" class="panel msg-card" :class="{hidden: !t.active}">' +
       '        <div class="row"><b class="grow">{{ t.title }}</b><span v-if="!t.active" class="small muted">скрыт</span></div>' +
       '        <div class="pre small msg-text" v-html="hl(t.text)"></div>' +
-      '        <div class="row"><button class="btn sm" @click="copy(t)">📋 Скопировать</button><button class="btn ghost sm" @click="edit(t)">изменить</button></div>' +
+      '        <div class="row"><button class="btn sm" @click="copy(t)">📋 Скопировать</button><button class="btn ghost sm w" @click="edit(t)">изменить</button></div>' +
       '      </div></div></section>' +
       '    <div v-if="!groups.length" class="panel muted">Ничего не найдено</div>' +
       '  </template>' +
@@ -2941,9 +2942,10 @@
       '    <a class="btn ghost sm help-mobile" href="#calendar" @click.prevent="go(\'calendar\')" title="Календарь">📅</a>' +
       '    <a class="btn ghost sm help-mobile" href="#report" @click.prevent="go(\'report\')" title="Отчёт">▤</a>' +
       '    <a class="btn ghost sm help-mobile" href="#guide" @click.prevent="go(\'guide\')" title="Как работать">?</a>' +
-      '    <button class="btn primary" @click="store.newLeadOpen = true" title="Горячая клавиша N">+ Обращение</button>' +
+      '    <button class="btn primary w" @click="store.newLeadOpen = true" title="Горячая клавиша N">+ Обращение</button>' +
       '    <span class="save-state">{{ saveState }}</span>' +
       '    <span class="who">{{ store.boot.user.name }}</span>' +
+      '    <span v-if="store.boot.user.readOnly" class="ro-badge" title="Можно смотреть, менять нельзя">👁 только просмотр</span>' +
       '  </div></header>' +
       '  <div v-if="store.scopeError" class="main" style="padding-bottom:0"><div class="banner"><span class="grow">{{ store.scopeError }}</span>' +
       '    <a class="btn primary" :href="store.boot.appUrl" target="_top">Дать разрешения</a></div></div>' +
@@ -2962,7 +2964,7 @@
       '  </main>' +
       '  <nav class="bottom-nav">' +
       '    <a v-for="t in navLeft" :key="t.hash" :class="{active: store.route.name === t.name || store.route.name === t.also}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.title }}</a>' +
-      '    <button class="bn-add" @click="store.newLeadOpen = true" aria-label="Новое обращение">+</button>' +
+      '    <button class="bn-add w" @click="store.newLeadOpen = true" aria-label="Новое обращение">+</button>' +
       '    <a v-for="t in navRight" :key="t.hash" :class="{active: store.route.name === t.name}" :href="\'#\' + t.hash" @click.prevent="go(t.hash)"><span class="bn-ico">{{ t.ico }}</span>{{ t.short || t.title }}</a>' +
       '  </nav>' +
       '  <new-lead-modal v-if="store.newLeadOpen" @close="store.newLeadOpen = false"></new-lead-modal>' +
@@ -2997,7 +2999,7 @@
         var tag = (e.target.tagName || '').toLowerCase();
         if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        if ((e.key === 'n' || e.key === 'N' || e.key === 'т' || e.key === 'Т') && !store.newLeadOpen) {
+        if ((e.key === 'n' || e.key === 'N' || e.key === 'т' || e.key === 'Т') && !store.newLeadOpen && !(store.boot && store.boot.user.readOnly)) {
           e.preventDefault();
           store.newLeadOpen = true;
         } else if (e.key === '/' || e.key === '.') {
@@ -3024,6 +3026,8 @@
   call('getStart').then(function (data) {
     store.todayData = data.today;
     store.boot = data.boot;
+    // Наблюдатель: всё, что меняет данные, на экране спрятано (сервер всё равно не даст записать).
+    if (data.boot.user.readOnly) document.body.classList.add('read-only');
   }, function (err) {
     store.bootError = err.error;
   });

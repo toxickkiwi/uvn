@@ -102,6 +102,19 @@ function isBoss_(user) {
   return user.role === 'руководитель';
 }
 
+/** Роль «наблюдатель» (или «просмотр»): видит всё, менять ничего не может. */
+function isReadOnly_(user) {
+  return !!user && /^(наблюдатель|просмотр|только просмотр|читатель)$/.test(String(user.role || ''));
+}
+
+/** Пользователь текущего вызова с сайта; null — запуск из меню таблицы, редактора или триггера. */
+var API_USER_ = null;
+
+/** Любая запись в таблицу с сайта проходит здесь: наблюдателю — отказ. */
+function assertCanWrite_() {
+  if (API_USER_ && isReadOnly_(API_USER_)) throw userError_('У вас доступ только на просмотр — менять данные нельзя.');
+}
+
 /**
  * Обёртка для функций google.script.run: проверка доступа и перевод исключений
  * в ответ { ok: false, error, field } с понятным текстом.
@@ -109,6 +122,7 @@ function isBoss_(user) {
 function api_(fn) {
   try {
     var user = requireUser_();
+    API_USER_ = user;
     return { ok: true, data: fn(user) };
   } catch (e) {
     if (e && e.userMessage) {

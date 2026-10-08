@@ -588,6 +588,22 @@ function selfTestCases_() {
       groups = svcListDuplicates_(u).groups;
       if (groupOf(a.clientId)) throw new Error('после объединения дубль остался');
     }],
+    ['Наблюдатель: видит всё, менять ничего нельзя', function () {
+      var viewer = { email: 'test.viewer@example.com', name: 'Тех', role: 'наблюдатель', active: true };
+      if (!isReadOnly_(viewer) || isReadOnly_(u)) throw new Error('роль не распознана');
+      var any = svcListDeals_(viewer, { limit: 1 })[0];
+      try {
+        API_USER_ = viewer;
+        if (!svcGetToday_(viewer).counters) throw new Error('не видит «Сегодня»');
+        svcGetDeal_(viewer, any.id);
+        assertThrows_(function () { svcUpdateDeal_(viewer, any.id, { nextTask: 'взлом' }); }, null, 'правка сделки');
+        assertThrows_(function () { svcCreateDeal_(viewer, { client: { name: 'X', nick: 'x.viewer' }, deal: { channel: 'ВК', request: 'x' } }); }, null, 'новое обращение');
+        assertThrows_(function () { new Table_(SHEET.DEALS).update(any._row || 2, { nextTask: 'взлом' }); }, null, 'запись в обход');
+      } finally {
+        API_USER_ = null;
+      }
+      if (svcGetDeal_(u, any.id).deal.nextTask === 'взлом') throw new Error('наблюдатель изменил сделку');
+    }],
     ['«Сегодня»: просрочено, на сегодня, без ответа, счётчики', function () {
       var t = svcGetToday_(u);
       if (!t.fresh.length) throw new Error('нет блока «Без ответа»');

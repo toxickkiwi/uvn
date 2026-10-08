@@ -263,6 +263,7 @@ Table_.prototype.objToRow_ = function (obj, base) {
 
 /** Добавляет строку в конец листа. Возвращает объект с _row. */
 Table_.prototype.append = function (obj) {
+  assertCanWrite_();
   var row = this.objToRow_(obj, null);
   var rowNum = lastDataRow_(this.sheet) + 1;
   if (rowNum > this.sheet.getMaxRows()) this.sheet.insertRowsAfter(this.sheet.getMaxRows(), 50);
@@ -273,6 +274,7 @@ Table_.prototype.append = function (obj) {
 
 /** Меняет поля строки rowNum одним setValues. Возвращает обновлённый объект. */
 Table_.prototype.update = function (rowNum, patch) {
+  assertCanWrite_();
   var base = this.data[rowNum - 2];
   if (!base) throw new Error('Строка ' + rowNum + ' на листе ' + this.name + ' не найдена');
   var row = this.objToRow_(patch, base);
@@ -304,6 +306,7 @@ function lastDataRow_(sheet) {
 
 /** Выполняет fn под общей блокировкой скрипта. Все записи идут только через неё. */
 function withLock_(fn) {
+  assertCanWrite_();
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(LOCK_WAIT_MS)) {
     throw userError_('Таблица сейчас занята другим сохранением. Повторите через несколько секунд.');
